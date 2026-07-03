@@ -789,6 +789,14 @@ class Verifier:
         )
         check_returncode, check_timed_out, output = await self._run_check(task.check, taskdir)
         ok = not missing_files and not check_timed_out and check_returncode == 0
+        if not ok and not check_timed_out and not output.strip():
+            # A silent failing check wastes the retry (no failure context to
+            # inject) and blinds the eval row. Say so, in both places.
+            output = (
+                f"[ringer] check failed silently (exit {check_returncode}, no output). "
+                "Prefer checks that print WHY they fail — the retry prompt and the "
+                "eval log both depend on it."
+            )
         return VerifyResult(
             ok=ok,
             check_returncode=check_returncode,
