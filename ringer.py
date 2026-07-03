@@ -393,6 +393,7 @@ class Manifest:
 class TaskRuntime:
     task: TaskSpec
     taskdir: Path
+    log_path: Path
     status: str = "queued"
     spec_short: str = ""
     attempts: int = 0
@@ -542,7 +543,7 @@ class StateWriter:
         with self.lock:
             tasks = []
             for runtime in self.runtimes:
-                log_tail = tail_lines(runtime.taskdir / "worker.log", line_count=3)
+                log_tail = tail_lines(runtime.log_path, line_count=3)
                 engine = self.engines.get(runtime.task.engine)
                 process_name = engine.process_name if engine else runtime.task.engine
                 tasks.append(
@@ -552,7 +553,7 @@ class StateWriter:
                         "engine": runtime.task.engine,
                         "spec": runtime.task.spec,
                         "spec_short": runtime.spec_short,
-                        "activity": worker_activity(runtime.taskdir / "worker.log", log_tail),
+                        "activity": worker_activity(runtime.log_path, log_tail),
                         "elapsed_s": round(runtime.elapsed_s(now), 1),
                         "tokens": runtime.tokens,
                         "attempts": runtime.attempts,
@@ -846,14 +847,7 @@ class RingerRunner:
         self.run_id = build_run_id(manifest.run_name)
         self.started_at = datetime.now(timezone.utc)
         self.lock = threading.RLock()
-        self.runtimes = [
-            TaskRuntime(
-                task=task,
-                taskdir=self._taskdir(task),
-                spec_short=shorten(task.spec, 120),
-            )
-            for task in manifest.tasks
-        ]
+        self.runtimes = [self._task_runtime(task) for task in manifest.tasks]
         self.state_writer = StateWriter(
             self.run_id,
             manifest.run_name,
@@ -955,7 +949,7 @@ class RingerRunner:
                     await self._cleanup_worktree_on_pass(runtime)
                     return
                 if attempt < max_attempts and verdict in {"FAIL", "TIMEOUT"}:
-                    failure_context = build_failure_context(runtime.taskdir, verify.raw_output_excerpt)
+                    failure_context = build_failure_context(runtime.log_path, verify.raw_output_excerpt)
                     current_spec = (
                         f"{runtime.task.spec}\n\n"
                         f"Previous attempt failed: {failure_context}. Fix it."
@@ -988,7 +982,7 @@ class RingerRunner:
             stdout, _ = await proc.communicate()
             if proc.returncode != 0:
                 message = stdout.decode("utf-8", errors="replace")
-                append_text(taskdir / "worker.log", f"[ringer.py] git worktree add failed:\n{message}\n")
+                append_text(runtime.log_path, f"[ringer.py] git worktree add failed:\n{message}\n")
                 return False, message.strip() or "git worktree add failed"
             return True, None
         taskdir.mkdir(parents=True, exist_ok=True)
@@ -1012,7 +1006,7 @@ class RingerRunner:
         stdout, _ = await proc.communicate()
         if proc.returncode != 0:
             message = stdout.decode("utf-8", errors="replace")
-            append_text(runtime.taskdir / "worker.log", f"[ringer.py] git worktree remove failed:\n{message}\n")
+            append_text(runtime.log_path, f"[ringer.py] git worktree remove failed:\n{message}\n")
 
     async def _record_prepare_error(self, runtime: TaskRuntime, error: str) -> None:
         with self.lock:
@@ -1030,7 +1024,7 @@ class RingerRunner:
         self._log_attempt(runtime, runtime.task.spec, False, worker, verify, "ERROR", 0)
 
     async def _run_worker(self, runtime: TaskRuntime, spec: str, attempt: int) -> WorkerResult:
-        log_path = runtime.taskdir / "worker.log"
+        log_path = runtime.log_path
         engine = self.config.engines.get(runtime.task.engine)
         if engine is None:
             return WorkerResult(
@@ -1169,12 +1163,31 @@ class RingerRunner:
             }
         )
 
+    def _task_runtime(self, task: TaskSpec) -> TaskRuntime:
+        taskdir = self._taskdir(task)
+        return TaskRuntime(
+            task=task,
+            taskdir=taskdir,
+            log_path=self._log_path(task, taskdir),
+            spec_short=shorten(task.spec, 120),
+        )
+
     def _taskdir(self, task: TaskSpec) -> Path:
         taskdir = (self.manifest.workdir / task.key).resolve()
         workdir = self.manifest.workdir.resolve()
         if taskdir != workdir and workdir not in taskdir.parents:
             raise ValueError(f"task key escapes workdir: {task.key}")
         return taskdir
+
+    def _log_path(self, task: TaskSpec, taskdir: Path) -> Path:
+        if not self.manifest.worktrees:
+            return taskdir / "worker.log"
+        logs_dir = (self.manifest.workdir / "logs").resolve()
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        log_path = (logs_dir / f"{task.key}.worker.log").resolve()
+        if log_path != logs_dir and logs_dir not in log_path.parents:
+            raise ValueError(f"task key escapes logs dir: {task.key}")
+        return log_path
 
 
 class RollingBytes:
@@ -1523,8 +1536,8 @@ def looks_like_assistant_text(line: str) -> bool:
     return bool(re.search(r"[A-Za-z]", line))
 
 
-def build_failure_context(taskdir: Path, raw_check_output: str) -> str:
-    worker_tail = tail_text(taskdir / "worker.log")
+def build_failure_context(log_path: Path, raw_check_output: str) -> str:
+    worker_tail = tail_text(log_path)
     context = f"{worker_tail}\n{raw_check_output}".strip()
     if len(context) > 6000:
         return context[-6000:]
