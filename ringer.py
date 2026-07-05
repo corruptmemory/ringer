@@ -238,6 +238,7 @@ def built_in_codex_engine() -> EngineConfig:
             "exec",
             "--skip-git-repo-check",
             "{access_args}",
+            "{engine_args}",
             "-C",
             "{taskdir}",
             "{spec}",
@@ -331,6 +332,7 @@ class TaskSpec:
     expect_files: tuple[str, ...] = ()
     timeout_s: int = DEFAULT_TIMEOUT_S
     full_access: bool = False
+    engine_args: tuple[str, ...] = ()
 
     @classmethod
     def from_obj(cls, obj: dict[str, Any]) -> "TaskSpec":
@@ -352,6 +354,9 @@ class TaskSpec:
         timeout_s = int(obj.get("timeout_s", DEFAULT_TIMEOUT_S))
         if timeout_s <= 0:
             raise ValueError(f"task {key}: timeout_s must be positive")
+        engine_args = obj.get("engine_args", [])
+        if not isinstance(engine_args, list) or not all(isinstance(item, str) for item in engine_args):
+            raise ValueError(f"task {key}: engine_args must be a list of strings")
         return cls(
             key=key,
             spec=spec,
@@ -360,6 +365,7 @@ class TaskSpec:
             expect_files=tuple(str(item) for item in expect_files),
             timeout_s=timeout_s,
             full_access=bool(obj.get("full_access", False)),
+            engine_args=tuple(engine_args),
         )
 
 
@@ -1609,6 +1615,7 @@ class RingerRunner:
             taskdir=runtime.taskdir,
             spec=spec,
             full_access=runtime.task.full_access,
+            engine_args=runtime.task.engine_args,
         )
         append_text(
             log_path,
@@ -1884,12 +1891,16 @@ def build_worker_command(
     taskdir: Path,
     spec: str,
     full_access: bool,
+    engine_args: tuple[str, ...] = (),
 ) -> list[str]:
     access_args = engine.full_access_args if full_access else engine.sandbox_args
     command = [engine.bin]
     for item in engine.args_template:
         if item == "{access_args}":
             command.extend(access_args)
+            continue
+        if item == "{engine_args}":
+            command.extend(engine_args)
             continue
         if item == "{sandbox_args}":
             command.extend(engine.sandbox_args)
@@ -2195,6 +2206,7 @@ def dry_run(
                 taskdir=taskdir,
                 spec=task.spec,
                 full_access=task.full_access,
+                engine_args=task.engine_args,
             )
             if engine is not None
             else []

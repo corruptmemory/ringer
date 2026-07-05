@@ -75,6 +75,7 @@ Each task gets its own directory, its own worker, its own log, and its own verdi
 | `expect_files` | Files that must exist and be non-empty before the check runs |
 | `engine` | Which configured engine runs this task (default `codex`) |
 | `timeout_s` | Per-task kill timer (default 900) |
+| `engine_args` | Extra CLI flags for this task's worker, spliced in at the engine's `{engine_args}` placeholder — e.g. `["-c", "model_reasoning_effort=low"]` so the orchestrator picks reasoning depth per task |
 | `full_access` | Worker runs unsandboxed — required for workers that spawn their own sub-workers; must also be enabled in config |
 | `worktrees` (run-level) | Give each task an isolated git worktree of `repo` so parallel workers can't collide |
 
