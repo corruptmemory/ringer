@@ -1,0 +1,22 @@
+You are running a model-calling probe under Ringer.
+
+Boundary: do not edit project files and do not hide failed model calls. Own only {{TRANSCRIPT_FILE}} and {{OUTPUT_FILE}}.
+
+Model: {{MODEL_NAME}}
+Goal: {{PROBE_GOAL}}
+Expected behavior: {{EXPECTED_BEHAVIOR}}
+
+HOW TO RUN:
+
+{{PROBE_COMMAND — exact command or short command sequence to run, with paths}}
+
+Prompt to send:
+
+{{MODEL_PROMPT}}
+
+Output contract:
+
+- Save raw CLI/API output to {{OUTPUT_FILE}}.
+- Write {{TRANSCRIPT_FILE}} with `MODEL RESPONSE:` followed by the model response copied verbatim enough for validation.
+- Include `PROMPT:` and the exact prompt sent.
+- Include `VERDICT:` with pass/fail and the evidence.

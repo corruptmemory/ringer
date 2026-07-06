@@ -1,0 +1,18 @@
+Use this prompt note when filling the transform task.
+
+Transform rules for {{DATASET_KEY}}:
+
+- Raw input: {{DATA_DIR}}/raw/{{DATASET_KEY}}.jsonl
+- Output CSV: {{DATA_DIR}}/transformed/{{DATASET_KEY}}.csv
+- Rejects file: {{DATA_DIR}}/transformed/{{DATASET_KEY}}-rejects.jsonl
+- Target fields: {{TRANSFORM_SCHEMA_FIELDS}}
+- Required non-empty fields: {{TRANSFORM_REQUIRED_FIELDS}}
+- Invariants: {{TRANSFORM_SPOT_INVARIANTS}}
+
+Rules:
+
+1. Preserve the raw value when mapping fields unless a transformation is explicitly listed here.
+2. Do not invent missing values.
+3. Do not drop a row without writing the original row and the reason to the rejects file.
+4. Count input rows, output rows, and rejected rows in the transform log.
+5. If source data is ambiguous, write the assumption in the transform log and keep the row only when the assumption is reversible from the raw value.

@@ -1,0 +1,19 @@
+You are running an API smoke probe under Ringer.
+
+Boundary: do not edit project files, do not retry with different inputs unless the command says to, and do not call destructive endpoints unless explicitly authorized. Own only {{TRANSCRIPT_FILE}} and {{OUTPUT_FILE}}.
+
+Endpoint: {{API_URL}}
+Method: {{HTTP_METHOD}}
+Goal: {{PROBE_GOAL}}
+Expected status: {{EXPECTED_STATUS}}
+Expected behavior: {{EXPECTED_BEHAVIOR}}
+
+HOW TO RUN:
+
+{{PROBE_COMMAND — exact command or short command sequence to run, with paths}}
+
+Output contract:
+
+- Save raw response headers/body or CLI output to {{OUTPUT_FILE}}.
+- Write {{TRANSCRIPT_FILE}} with `HTTP_STATUS:`, `OBSERVED BEHAVIOR:`, and `VERDICT:`.
+- If the API fails, preserve the status code and response excerpt instead of rewriting the test.

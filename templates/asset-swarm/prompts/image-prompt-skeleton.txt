@@ -1,0 +1,11 @@
+SUBJECT:
+{{IMAGE_SUBJECT}}
+
+STYLE:
+{{SHARED_STYLE_BLOCK}}
+
+NO-TEXT RULE:
+{{NO_TEXT_RULE}}
+
+NEGATIVE RULES:
+No logos, no watermarks, no readable UI brand names, no fake screenshots, no lettering, no captions, no charts with text, no client names.
