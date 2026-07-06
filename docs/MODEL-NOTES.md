@@ -24,6 +24,10 @@ checks and raw logs support — no vibes, no worker self-reports.
   editorial diagram pages, each verified by rendering through headless
   Chromium to MP4/PNG: 7/7 passed on attempt 1. Broadcast-quality visual
   output from rich storyboard specs; the render-as-check pattern works.
+- 2026-07-06 — milk-crate demo: two single-file website builds (v1 scaffold
+  316s/~175k tok; final brand+market-test reskin 622s/~184k tok), both passed
+  14-assertion content checks on attempt 1, including base64-embedding photos
+  and honoring honesty-marker requirements. Codex remains the site-build lane.
 
 ## glm-5.2 via opencode (`openrouter/z-ai/glm-5.2`)
 
@@ -41,6 +45,14 @@ checks and raw logs support — no vibes, no worker self-reports.
   openrouter-image commands, idempotent batch-runner spec): 3/3 passed on
   attempt 1, ~14.5k tokens each. The "execute these exact commands, do not
   improve them" spec pattern is fully reliable for glm-5.2.
+
+- 2026-07-06 — milk-crate demo, full run: 4 independent buyer-persona
+  reviews (focus group) all passed attempt 1 (~15k tokens, ~2¢ each) with an
+  explicit VERDICT-block contract — persona work is squarely in glm's zone.
+  Market read with live curl fetching passed once the spec demanded verbatim
+  copy-paste of source URLs (first fail was the worker trimming URL slugs —
+  spec/check craft, not model weakness). Brand-kit doc incl. a clean inline
+  SVG wordmark: good, one bounce off an over-strict check regex.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
@@ -63,3 +75,15 @@ checks and raw logs support — no vibes, no worker self-reports.
   This is why the per-task `model` field exists — a bakeoff is only a
   bakeoff if the manifest, not the engine block, names the model. Verify
   with the `model` column in the run state, not the task key.
+- 2026-07-06 — spawning 5-6 opencode workers simultaneously hit opencode's
+  local "database is locked" (sqlite) — several instant attempt-1 failures,
+  all absorbed by Ringer's retry. Cosmetic in Ringside ("sent back" at 0s) but
+  wastes an attempt; consider staggering opencode spawns.
+- 2026-07-06 — opencode's bash tool kills foreground commands around the
+  ~2-minute mark: a 2min+ image-generation API call can never finish inline.
+  Spec pattern that works: nohup the long command in the background, then
+  poll for the output file in separate short commands.
+- 2026-07-06 — two check-craft lessons from the same run: (1) URL-allowlist
+  checks must be prefix-tolerant (workers legitimately trim slugs); (2) any
+  heading-regex must tolerate numbered headings ("## 3. Type / Typography").
+  Both failures looked like worker laziness until the raw logs said otherwise.

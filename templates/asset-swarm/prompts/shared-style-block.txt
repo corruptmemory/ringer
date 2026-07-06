@@ -1,0 +1,3 @@
+{{SHARED_STYLE_BLOCK}}
+
+Use this shared style block unchanged across every image in the batch so the asset set feels like one library rather than unrelated one-offs.

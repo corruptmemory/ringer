@@ -1,0 +1,23 @@
+# Competitive teardown source allowlist
+
+Copy this file to a run-specific `sources.md`, verify each source yourself, and
+give scouts the filled path as `{{ALLOWLIST_PATH}}`.
+
+Rules for the orchestrator:
+
+- Add only URLs the scouts may cite.
+- Keep one target per section.
+- Prefer canonical pricing, docs, changelog, benchmark, terms, or product pages.
+- Remove broad homepages unless the homepage itself is the source being compared.
+
+## Target: ExampleCo
+
+- https://example.com/pricing
+- https://example.com/docs/rate-limits
+- https://example.com/customers/example-case-study
+
+## Target: SampleSuite
+
+- https://samplesuite.example/pricing
+- https://samplesuite.example/docs/api-limits
+- https://samplesuite.example/blog/2026-product-benchmark
