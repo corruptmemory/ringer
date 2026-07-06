@@ -47,6 +47,13 @@ checks and raw logs support — no vibes, no worker self-reports.
   orchestrator integration review. Needle checks need an anti-hidden-text
   assertion or documented exceptions.
 
+- 2026-07-06 — OpenRouter catalog + explore suggester (catalog subcommand
+  with snapshot/changelog/free-detection, daemon auto-refresh, tiered
+  --explore; offline fixture-driven contract check): PASS attempt 1, 362s.
+  Follow-up sentinel-pricing fix (variable-pricing models): PASS attempt 1,
+  114s. With the verify-order fix landed, zero phantom retries across the
+  whole batch.
+
 ## glm-5.2 via opencode (`openrouter/z-ai/glm-5.2`)
 
 - The cheap-intelligence default (~$0.74/M in, $2.33/M out, 2026-07 —
@@ -75,6 +82,9 @@ checks and raw logs support — no vibes, no worker self-reports.
   manifests: passed attempt 2; attempt 1 was lost to the harness ordering
   bug, not model quality — the retry worker's log correctly diagnosed that
   harness bug unprompted, impressive debugging from the cheap lane.
+- 2026-07-06 — catalog/explore README section (flags, promotion ladder,
+  per-user framing): PASS attempt 1, ~21.5k tokens. Doc sections against a
+  grep-able content contract remain a safe glm lane.
 - 2026-07-06 — milk-crate demo, full run: 4 independent buyer-persona
   reviews (focus group) all passed attempt 1 (~15k tokens, ~2¢ each) with an
   explicit VERDICT-block contract — persona work is squarely in glm's zone.
