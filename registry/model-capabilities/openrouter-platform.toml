@@ -1,0 +1,47 @@
+[openrouter_platform]
+caching_passthrough = "OpenRouter supports provider prompt caching rather than one universal cache implementation. OpenAI, Grok, Moonshot AI, Groq, DeepSeek, and Gemini are documented as automatic/implicit on supported models; Alibaba Qwen and Anthropic can require explicit cache_control breakpoints, and Anthropic also supports top-level automatic cache_control on direct Anthropic routing. OpenRouter uses sticky routing to keep cached conversations on the same provider, exposes cached_tokens/cache_write_tokens in usage, and shows effective pricing after prompt caching. Responses API does not expose explicit per-block cache_control; use Chat Completions or Anthropic Messages for fine-grained breakpoints. For harnesses, treat cache_control as provider-specific and verify support before assuming passthrough."
+require_parameters = "provider.require_parameters defaults to false. With the default routing strategy, a provider that does not support a request parameter can still receive the request and ignore the parameter. Set require_parameters=true when behavior depends on tools, response_format, structured_outputs, reasoning controls, or parallel_tool_calls; then OpenRouter restricts routing to providers that support all specified parameters."
+free_variants = "OpenRouter free model variants use IDs ending in :free and have per-minute and per-day limits. The fetched docs currently render the exact numeric RPM/RPD thresholds as template placeholders/blanks, so exact current numbers are unknown from official fetched text. Negative credit balance can still produce 402 errors for free models. Free variants do not imply a uniform data policy; use provider.data_collection='deny' or provider.zdr=true when the harness requires providers that do not retain prompts."
+provider_routing = "By default OpenRouter load-balances across top providers to maximize uptime and selects low-cost/best available serving, with fallback to other providers or GPUs on 5xx responses or rate limits. provider.order prioritizes providers, allow_fallbacks=false disables fallback beyond the chosen path, only/ignore constrain providers, sort chooses price/throughput/latency, quantizations filters serving precision, and base provider slugs match all endpoint variants. Sticky routing can pin cached sessions to a provider; manual provider.order takes priority over sticky routing."
+
+[[sources]]
+claim = "openrouter_platform: caching_passthrough provider sticky routing and supported provider cache modes"
+url = "https://openrouter.ai/docs/guides/best-practices/prompt-caching"
+accessed = "2026-07-06"
+quote = "Most providers automatically enable prompt caching"
+
+[[sources]]
+claim = "openrouter_platform: caching_passthrough usage metrics"
+url = "https://openrouter.ai/docs/guides/best-practices/prompt-caching"
+accessed = "2026-07-06"
+quote = "The usage object in API responses includes detailed cache metrics"
+
+[[sources]]
+claim = "openrouter_platform: require_parameters routing behavior"
+url = "https://openrouter.ai/docs/guides/routing/provider-selection"
+accessed = "2026-07-06"
+quote = "Only use providers that support all parameters in your request."
+
+[[sources]]
+claim = "openrouter_platform: free_variants rate limits and 402 behavior"
+url = "https://openrouter.ai/docs/api/reference/limits"
+accessed = "2026-07-06"
+quote = "free model variant (with an ID ending in"
+
+[[sources]]
+claim = "openrouter_platform: free_variants and provider data policies"
+url = "https://openrouter.ai/docs/guides/routing/provider-selection"
+accessed = "2026-07-06"
+quote = "`deny`: use only providers which do not collect user data"
+
+[[sources]]
+claim = "openrouter_platform: provider_routing default load balancing and provider object"
+url = "https://openrouter.ai/docs/guides/routing/provider-selection"
+accessed = "2026-07-06"
+quote = "By default, requests are load balanced across the top providers to maximize uptime."
+
+[[sources]]
+claim = "openrouter_platform: provider_routing fallback behavior"
+url = "https://openrouter.ai/docs/api/reference/overview"
+accessed = "2026-07-06"
+quote = "fall back to other providers or GPUs if it receives a 5xx response code or if you are rate-limited."

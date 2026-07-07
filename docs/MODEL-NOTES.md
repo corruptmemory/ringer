@@ -66,6 +66,12 @@ checks and raw logs support — no vibes, no worker self-reports.
   the free-promo watchlist legitimately mentions a free model before the
   ranked cards, and the check compared raw first-occurrence). Six review
   findings fixed in one batch, PASS attempt 1, 141s.
+- 2026-07-06 — model-db stack (SQLite read model 516s, page redesign 536s,
+  Ringside tab 527s, plus three fix batches all attempt-1): five substantial
+  ringer.py features in one day, every one against an executed contract
+  check. Review lane found the HIGH that mattered (sync cursor skipping a
+  half-written trailing line). Codex is the proven lane for both sides of
+  the review->fix loop on this codebase.
 
 ## glm-5.2 via opencode (`openrouter/z-ai/glm-5.2`)
 
@@ -126,6 +132,11 @@ checks and raw logs support — no vibes, no worker self-reports.
   (it actually rendered hostile model ids to prove escaping). Second
   proven-tier structured review in one day; glm is now the default review
   lane for mid-size diffs.
+- 2026-07-06 — invariants/injection/frontend review of the 4,061-line
+  model-db branch: PASS attempt 1, 96k tokens, 14 coverage items — two real
+  contention findings (full catalog re-ingest per sync; schema writes on
+  read paths) plus an empirical XSS all-clear on the new DOM surfaces.
+  Third proven-tier structured review today.
 
 ## kimi-k2.7 via opencode (`openrouter/moonshotai/kimi-k2.7-code`)
 
@@ -167,6 +178,15 @@ checks and raw logs support — no vibes, no worker self-reports.
   this audition on long structured code review; if it gets another slot,
   try a shorter, more mechanical task first.
 
+## llama-3.3-70b-instruct (via opencode, `openrouter/meta-llama/llama-3.3-70b-instruct:free`)
+
+- 2026-07-06 — AUDITION FAILED (exploration slot, $0). Fresh-eyes review of
+  a 4,061-line diff with a verbatim-quote citation requirement: failed the
+  structured-report check both attempts. Second free-model audition to fail
+  on long structured code review (after nemotron-3-super) — the exploration
+  ladder now says: audition free models on SHORT mechanical tasks first;
+  long-diff review is a proven-tier lane.
+
 ## Small / flash-class models
 
 - First to choke on long conversational or multi-turn harness tasks —
@@ -174,6 +194,16 @@ checks and raw logs support — no vibes, no worker self-reports.
   group lesson).
 
 ## Process lessons (cross-model)
+
+- 2026-07-06 — the orchestrator's CHECKS were the day's top failure source:
+  three check bugs (fixture newline join, first-occurrence ordering vs the
+  watchlist strip, claim-prefix split on '.' instead of ':') each produced
+  a FAIL verdict on work that was actually correct — including all four
+  capability-research packets at once. Every one was caught by reading raw
+  logs/artifacts before blaming the model. Corollary for the scoreboard:
+  recorded FAILs whose root cause was a check bug are annotated here, and
+  check fixtures deserve the same review care as production code.
+
 
 - 2026-07-06 — HARNESS BUG (fix in flight on feat/model-perf-log):
   Verifier.verify evaluated expect_files BEFORE running the check, so any

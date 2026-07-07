@@ -1,0 +1,106 @@
+[model]
+key = "grok-build"
+display = "Grok Build"
+vendor = "xAI"
+release_date = "2026-05-14"
+
+[api]
+endpoint_families = ["responses", "chat-completions", "native-vendor"]
+auth = "In our setup, Grok Build CLI v0.2.x uses grok.com OAuth/session auth through the CLI chat proxy. Generally, xAI also exposes Grok Build 0.1 on the xAI API with API-key bearer auth; xAI documents the public API slug as grok-build-0.1, while the CLI catalog exposes grok-build."
+streaming = "Supported. Public xAI text streaming uses SSE with stream=true; local Grok 0.2.81 docs say most CLI proxy models are streaming-first, while grok-build supports both streaming and non-streaming."
+
+[caching]
+supported = true
+mode = "implicit"
+how_enabled = "xAI API prompt caching is automatic for matching starting messages; xAI recommends the x-grok-conv-id header to improve cache hits. No separate CLI-only cache switch is disclosed."
+ttl = "unknown"
+read_pricing_per_m = "$0.20"
+write_pricing_per_m = "$1.00 normal prompt input price; no separate cache-write price disclosed"
+min_cacheable_prefix_tokens = "unknown"
+
+[tool_calling]
+format = "Responses API tools/function calls and xAI SDK chat tools. xAI structured-output docs say tool-call arguments strictly conform to the input JSON Schema."
+parallel = "unknown"
+strict_json_schema = true
+quirks = [
+  "With streaming, xAI returns a function call whole in a single chunk rather than streaming it across chunks.",
+  "No xAI documentation found that discloses Grok Build 0.1 parallel tool-call behavior.",
+  "No official long-context malformed-JSON failure mode was found for Grok Build 0.1."
+]
+
+[reasoning]
+params = []
+defaults = "Grok Build 0.1 is documented as a reasoning-capable coding model, but xAI does not document reasoning_effort support for this model; local Grok 0.2.81 catalog reports supports_reasoning_effort=false."
+max_output_interaction = "unknown"
+
+[limits]
+context_window = 256000
+max_output_tokens = "unknown"
+rate_limits = "CLI OAuth plan limits are unknown. Public xAI API docs for grok-build-0.1 disclose 256k context. xAI public rate-limit docs list tiered caps for grok-build-0.1 from 30 to 166 RPS and 10M to 85M TPM; the model page also shows 37 RPS and 10,000,000 TPM for us-east-1."
+
+[pricing]
+prompt_per_m = "$1.00"
+completion_per_m = "$2.00"
+cache_read_per_m = "$0.20"
+cache_write_per_m = "$1.00 normal prompt input price; no separate cache-write price disclosed"
+as_of = "2026-07-06"
+
+[[sources]]
+claim = "model: Grok Build beta release and public API slug"
+url = "https://docs.x.ai/developers/release-notes"
+accessed = "2026-07-06"
+quote = "Grok Build is now available"
+
+[[sources]]
+claim = "api: CLI TUI, headless use, browser auth, and API availability"
+url = "https://docs.x.ai/build/overview"
+accessed = "2026-07-06"
+quote = "opens a browser for authentication"
+
+[[sources]]
+claim = "caching: implicit prompt caching"
+url = "https://docs.x.ai/developers/advanced-api-usage/prompt-caching"
+accessed = "2026-07-06"
+quote = "automatically caches"
+
+[[sources]]
+claim = "tool_calling: function calling and streaming behavior"
+url = "https://docs.x.ai/developers/tools/function-calling"
+accessed = "2026-07-06"
+quote = "single chunk"
+
+[[sources]]
+claim = "tool_calling: strict tool schema behavior"
+url = "https://docs.x.ai/developers/model-capabilities/text/structured-outputs"
+accessed = "2026-07-06"
+quote = "strictly conform"
+
+[[sources]]
+claim = "reasoning: reasoning capability is present but parameter support is not disclosed for Grok Build"
+url = "https://docs.x.ai/developers/models/grok-build-0.1"
+accessed = "2026-07-06"
+quote = "The model can think"
+
+[[sources]]
+claim = "reasoning: reasoning_effort is documented for grok-4.3, not Grok Build"
+url = "https://docs.x.ai/developers/model-capabilities/text/reasoning"
+accessed = "2026-07-06"
+quote = "grok-4.3 supports"
+
+[[sources]]
+claim = "limits: public API context and public model-page rate limits"
+url = "https://docs.x.ai/developers/models/grok-build-0.1"
+accessed = "2026-07-06"
+quote = "256,000"
+
+[[sources]]
+claim = "limits: tiered API rate limits"
+url = "https://docs.x.ai/developers/rate-limits"
+accessed = "2026-07-06"
+quote = "grok-build-0.1"
+
+[[sources]]
+claim = "pricing: API input, cached input, and output token prices"
+url = "https://docs.x.ai/developers/pricing"
+accessed = "2026-07-06"
+quote = "256k$1.00$0.20$2.00"

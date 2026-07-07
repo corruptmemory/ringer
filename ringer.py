@@ -16,6 +16,11 @@ import socket
 import subprocess
 import sys
 
+try:
+    import sqlite3
+except Exception:  # pragma: no cover - exercised by monkeypatch in tests.
+    sqlite3 = None  # type: ignore[assignment]
+
 if sys.version_info < (3, 11):
     raise SystemExit(
         f"ringer requires Python 3.11+ (tomllib); found {sys.version.split()[0]} at {sys.executable}"
@@ -1617,6 +1622,14 @@ def describe_catalog_event(event: dict[str, Any]) -> str:
     if kind == "removed":
         return f"{ts} {model_id} removed"
     return f"{ts} {model_id} {kind}"
+
+
+def describe_catalog_event_humanized(event: dict[str, Any]) -> str:
+    text = describe_catalog_event(event)
+    ts = str(event.get("ts", ""))
+    if ts and text.startswith(ts):
+        return humanized_log_date(ts) + text[len(ts) :]
+    return text
 
 
 def run_catalog_command(args: argparse.Namespace) -> int:
@@ -3659,9 +3672,306 @@ def artifact_content_type(path: Path) -> str:
     return "application/octet-stream"
 
 
+def inject_models_tab_into_ringside_html(html: str) -> str:
+    if 'id="models-panel"' in html or 'id="artifacts-panel"' not in html:
+        return html
+    tabs = """
+    <nav class="tabs" id="ringside-tabs" aria-label="Ringside views">
+      <button type="button" class="tab" id="runs-tab" aria-selected="true">Runs</button>
+      <button type="button" class="tab" id="models-tab" aria-selected="false">Models</button>
+    </nav>
+"""
+    panel = """
+      <section id="models-panel" class="panel models-panel" hidden>
+        <div id="models-status" class="models-status mono">models not loaded</div>
+        <div id="models-table-wrap" class="models-table-wrap">
+          <div class="empty">No model results yet. Run './ringer.py models' for the local scoreboard docs.</div>
+        </div>
+      </section>
+"""
+    style = """
+    .models-panel {
+      min-height: calc(100vh - 83px);
+      padding: 0 clamp(12px, 2vw, 22px) clamp(20px, 3vw, 30px);
+    }
+    .models-status {
+      padding: 10px 0;
+      color: var(--muted);
+      font-size: 12px;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .models-status.error { color: var(--fail); }
+    .models-table-wrap { overflow: auto; }
+    .models-table {
+      width: 100%;
+      min-width: 860px;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    .models-table th,
+    .models-table td {
+      padding: 11px 10px;
+      border-bottom: 1px solid var(--hairline);
+      vertical-align: middle;
+      text-align: left;
+    }
+    .models-table th {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .models-table .numeric { text-align: right; }
+    .model-row { cursor: pointer; }
+    .model-row:hover,
+    .model-row.expanded { background: var(--surface); }
+    .model-name-cell { display: grid; gap: 1px; min-width: 220px; }
+    .model-display { color: var(--ink); font-weight: 700; }
+    .model-slug,
+    .models-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .tier-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border: 1px solid var(--hairline);
+      border-radius: 5px;
+      color: var(--ink);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .tier-badge.proven {
+      border-color: color-mix(in srgb, var(--pass) 48%, var(--hairline));
+      color: var(--pass);
+    }
+    .tier-badge.probation {
+      border-color: color-mix(in srgb, var(--accent) 48%, var(--hairline));
+      color: var(--accent);
+    }
+    .model-breakdown td {
+      padding: 0;
+      background: color-mix(in srgb, var(--surface) 72%, transparent);
+    }
+    .breakdown-grid {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) repeat(5, minmax(70px, auto));
+      gap: 0;
+      padding: 8px 10px 10px 46px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .breakdown-grid > div {
+      padding: 5px 8px;
+      border-bottom: 1px solid var(--hairline);
+      min-width: 0;
+    }
+    .breakdown-head {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    @media (max-width: 760px) {
+      .breakdown-grid {
+        grid-template-columns: minmax(110px, 1fr) repeat(2, minmax(64px, auto));
+        padding-left: 10px;
+      }
+      .breakdown-grid .optional { display: none; }
+    }
+"""
+    script = r"""
+    function installModelsView() {
+      const MODELS_REFRESH_MS = 30000;
+      const VIEW_KEY = "ringside-view";
+      const runsPanel = document.getElementById("artifacts-panel");
+      const modelsPanel = document.getElementById("models-panel");
+      const runsTab = document.getElementById("runs-tab");
+      const modelsTab = document.getElementById("models-tab");
+      const status = document.getElementById("models-status");
+      const wrap = document.getElementById("models-table-wrap");
+      if (!runsPanel || !modelsPanel || !runsTab || !modelsTab || !status || !wrap) return;
+      let payload = null;
+      let expandedModel = null;
+      let lastFetch = 0;
+      let inFlight = false;
+      let activeView = "runs";
+
+      function html(value) {
+        return String(value ?? "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function numberOrZeroLocal(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? number : 0;
+      }
+
+      function percent(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? `${Math.round(number * 100)}%` : "0%";
+      }
+
+      function modelDate(value) {
+        const text = String(value || "").trim();
+        if (!text) return "unknown";
+        const match = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+        if (match) {
+          const date = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+          return date.toLocaleDateString("en-US", {month: "long", day: "numeric", year: "numeric"});
+        }
+        const stamp = Date.parse(text);
+        return Number.isFinite(stamp)
+          ? new Date(stamp).toLocaleDateString("en-US", {month: "long", day: "numeric", year: "numeric"})
+          : text;
+      }
+
+      function safeClass(value) {
+        return String(value || "unknown").toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "unknown";
+      }
+
+      function groupsFor(model) {
+        const groups = Array.isArray(payload?.groups) ? payload.groups : [];
+        return groups.filter(group => String(group?.model || "") === model);
+      }
+
+      function breakdown(model) {
+        const groups = groupsFor(model);
+        if (!groups.length) return '<div class="empty">No per-task breakdown recorded for this model.</div>';
+        const cells = [
+          '<div class="breakdown-head">Task type</div>',
+          '<div class="breakdown-head">Tasks</div>',
+          '<div class="breakdown-head">First</div>',
+          '<div class="breakdown-head optional">Pass</div>',
+          '<div class="breakdown-head optional">Attempts</div>',
+          '<div class="breakdown-head optional">Last used</div>',
+        ];
+        groups.forEach(group => {
+          cells.push(
+            `<div>${html(group.task_type || "(untyped)")}</div>`,
+            `<div>${numberOrZeroLocal(group.tasks).toLocaleString()}</div>`,
+            `<div>${html(percent(group.first_try_pass_rate))}</div>`,
+            `<div class="optional">${html(percent(group.pass_rate))}</div>`,
+            `<div class="optional">${numberOrZeroLocal(group.attempts).toLocaleString()}</div>`,
+            `<div class="optional">${html(modelDate(group.last_seen))}</div>`,
+          );
+        });
+        return `<div class="breakdown-grid mono">${cells.join("")}</div>`;
+      }
+
+      function renderModels() {
+        const rows = Array.isArray(payload?.rollup) ? payload.rollup : [];
+        const error = String(payload?.error || "").trim();
+        status.classList.toggle("error", Boolean(error));
+        status.textContent = error ? `models unavailable: ${error}` : `updated ${modelDate(payload?.generated_at)}`;
+        if (!rows.length) {
+          wrap.innerHTML = '<div class="empty">No model results yet. Run \'./ringer.py models\' for the local scoreboard docs.</div>';
+          return;
+        }
+        const body = [];
+        rows.forEach((row, index) => {
+          const model = String(row.model || "");
+          const expanded = expandedModel === model;
+          const tierClass = safeClass(row.tier);
+          body.push(
+            `<tr class="model-row${expanded ? " expanded" : ""}" data-model="${html(model)}" tabindex="0">`,
+            `<td class="numeric">${index + 1}</td>`,
+            '<td><span class="model-name-cell">',
+            `<span class="model-display">${html(row.model_display || row.model || "unknown")}</span>`,
+            `<span class="model-slug mono">${html(row.model || "unknown")}</span>`,
+            '</span></td>',
+            `<td>${html(row.harness || "unknown")}</td>`,
+            `<td>${html(row.access || "unknown")}</td>`,
+            `<td><span class="tier-badge ${html(tierClass)}">${html(row.tier || "unknown")}</span></td>`,
+            `<td class="numeric">${numberOrZeroLocal(row.tasks).toLocaleString()}</td>`,
+            `<td class="numeric">${html(percent(row.first_try_pass_rate))}</td>`,
+            `<td class="numeric">${html(percent(row.pass_rate))}</td>`,
+            `<td>${html(modelDate(row.last_seen))}</td>`,
+            '</tr>',
+          );
+          if (expanded) body.push(`<tr class="model-breakdown"><td colspan="9">${breakdown(model)}</td></tr>`);
+        });
+        wrap.innerHTML = [
+          '<table class="models-table">',
+          '<thead><tr>',
+          '<th class="numeric">Rank</th><th>Model</th><th>Harness</th><th>API/Plan</th><th>Tier</th>',
+          '<th class="numeric">Tasks</th><th class="numeric">First-try %</th><th class="numeric">Pass %</th><th>Last used</th>',
+          '</tr></thead>',
+          `<tbody>${body.join("")}</tbody>`,
+          '</table>',
+        ].join("");
+      }
+
+      async function fetchModels(force) {
+        const now = Date.now();
+        if (inFlight || (!force && lastFetch && now - lastFetch < MODELS_REFRESH_MS)) return;
+        inFlight = true;
+        status.textContent = payload ? "refreshing models..." : "loading models...";
+        try {
+          const response = await fetch(`/api/models?t=${Date.now()}`, {cache: "no-store"});
+          payload = await response.json();
+          lastFetch = Date.now();
+        } catch (error) {
+          payload = {generated_at: new Date().toISOString(), groups: [], rollup: [], error: error?.message || "models unavailable"};
+        } finally {
+          inFlight = false;
+          renderModels();
+        }
+      }
+
+      function selectView(view, persist = true) {
+        activeView = view === "models" ? "models" : "runs";
+        runsPanel.hidden = activeView === "models";
+        modelsPanel.hidden = activeView !== "models";
+        runsTab.setAttribute("aria-selected", String(activeView === "runs"));
+        modelsTab.setAttribute("aria-selected", String(activeView === "models"));
+        if (persist) localStorage.setItem(VIEW_KEY, activeView);
+        if (activeView === "models") fetchModels(true);
+      }
+
+      runsTab.addEventListener("click", () => selectView("runs"));
+      modelsTab.addEventListener("click", () => selectView("models"));
+      wrap.addEventListener("click", event => {
+        const row = event.target.closest(".model-row");
+        if (!row) return;
+        const model = row.getAttribute("data-model") || "";
+        expandedModel = expandedModel === model ? null : model;
+        renderModels();
+      });
+      wrap.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const row = event.target.closest(".model-row");
+        if (!row) return;
+        event.preventDefault();
+        const model = row.getAttribute("data-model") || "";
+        expandedModel = expandedModel === model ? null : model;
+        renderModels();
+      });
+      setInterval(() => {
+        if (activeView === "models") fetchModels(false);
+      }, MODELS_REFRESH_MS);
+      selectView(localStorage.getItem(VIEW_KEY) === "models" ? "models" : "runs", false);
+    }
+
+"""
+    html = html.replace("    main {\n", style + "    main {\n", 1)
+    html = html.replace("    <main>\n", tabs + "\n    <main>\n", 1)
+    html = html.replace("    </main>\n", panel + "    </main>\n", 1)
+    html = html.replace("    tickClock();\n", script + "    installModelsView();\n    tickClock();\n", 1)
+    return html
+
+
 def read_ringside_html() -> str:
     try:
-        return RINGSIDE_HTML_PATH.read_text(encoding="utf-8")
+        return inject_models_tab_into_ringside_html(RINGSIDE_HTML_PATH.read_text(encoding="utf-8"))
     except OSError:
         return """<!doctype html>
 <html lang="en">
@@ -3832,11 +4142,15 @@ class PersistentHudServer:
         self.httpd: ThreadingHTTPServer | None = None
         self.thread: threading.Thread | None = None
         self.port: int | None = None
+        self.model_log_path: Path | None = None
+        self.default_model_log_path: Path = state_dir / "runs.jsonl"
+        self.model_db_path: Path | None = None
 
     def start(self) -> int:
         state_dir = self.state_dir
         artifact_root = artifacts_dir(state_dir)
         preferred_port = self.preferred_port
+        server_ref = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
@@ -3858,6 +4172,22 @@ class PersistentHudServer:
                             "active": read_active_runs_file(),
                         },
                     )
+                    return
+                if path == "/api/models":
+                    try:
+                        payload = build_models_api_payload(
+                            log_path=server_ref.model_log_path or (state_dir / "runs.jsonl"),
+                            default_log_path=server_ref.default_model_log_path,
+                            db_path=server_ref.model_db_path,
+                        )
+                    except Exception as exc:
+                        payload = {
+                            "generated_at": utc_now_iso(),
+                            "groups": [],
+                            "rollup": [],
+                            "error": str(exc) or exc.__class__.__name__,
+                        }
+                    send_json_response(self, payload)
                     return
                 if path.startswith("/api/open-folder"):
                     query = urllib.parse.urlparse(path).query
@@ -3940,6 +4270,9 @@ class PersistentHudServer:
                 webbrowser.open(url)
         print(f"Ringside: {url}", flush=True)
         return self.port
+
+    def start_background(self) -> int:
+        return self.start()
 
     def stop(self) -> None:
         if self.httpd is not None:
@@ -4379,6 +4712,824 @@ def default_model_notes_path() -> Path:
     return Path(__file__).resolve().parent / "docs" / "MODEL-NOTES.md"
 
 
+def default_model_registry_path() -> Path:
+    return Path(__file__).resolve().parent / "registry" / "model-identity.toml"
+
+
+def default_read_model_db_path() -> Path:
+    return ringer_home() / "ringer.db"
+
+
+def should_use_read_model_db(
+    *,
+    log_path: Path,
+    default_log_path: Path,
+    explicit_db: bool,
+) -> bool:
+    if explicit_db:
+        return True
+    return log_path.expanduser().resolve() == default_log_path.expanduser().resolve()
+
+
+@dataclass(frozen=True)
+class ModelIdentity:
+    model_display: str
+    harness: str
+    access: str
+    confidence: str = ""
+    source: str = ""
+
+
+@dataclass(frozen=True)
+class ModelIdentityRegistry:
+    identities: dict[tuple[str, str], ModelIdentity]
+    defaults: dict[str, str]
+    engine_meta: dict[str, ModelIdentity]
+
+    def resolve(self, engine: str, model_key: str) -> ModelIdentity:
+        engine_key = model_log_text(engine)
+        raw_model_key = model_log_text(model_key)
+        lookup_key = raw_model_key or self.defaults.get(engine_key, "")
+        identity = self.identities.get((engine_key, lookup_key))
+        if identity is not None:
+            return identity
+        meta = self.engine_meta.get(engine_key)
+        if engine_key == "opencode" and raw_model_key.startswith("openrouter/"):
+            return ModelIdentity(
+                model_display=raw_model_key.removeprefix("openrouter/"),
+                harness=(meta.harness if meta else "OpenCode"),
+                access=(meta.access if meta else "OpenRouter API"),
+                confidence="fallback",
+                source="unlisted OpenRouter slug",
+            )
+        if meta is not None and lookup_key:
+            return ModelIdentity(
+                model_display=lookup_key,
+                harness=meta.harness,
+                access=meta.access,
+                confidence="fallback",
+                source="engine default model key",
+            )
+        unknown = engine_key or "unknown"
+        return ModelIdentity(
+            model_display=unknown,
+            harness=unknown,
+            access="unknown",
+            confidence="unknown",
+            source="",
+        )
+
+
+EMPTY_MODEL_IDENTITY_REGISTRY = ModelIdentityRegistry({}, {}, {})
+
+
+def load_model_identity_registry(path: Path | None = None) -> ModelIdentityRegistry:
+    registry_path = (path or default_model_registry_path()).expanduser().resolve()
+    try:
+        with registry_path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return EMPTY_MODEL_IDENTITY_REGISTRY
+    engines_raw = data.get("engines", {})
+    if not isinstance(engines_raw, dict):
+        return EMPTY_MODEL_IDENTITY_REGISTRY
+    identities: dict[tuple[str, str], ModelIdentity] = {}
+    defaults: dict[str, str] = {}
+    engine_meta: dict[str, ModelIdentity] = {}
+    for engine_name, raw_engine in engines_raw.items():
+        if not isinstance(raw_engine, dict):
+            continue
+        engine = str(engine_name).strip()
+        if not engine:
+            continue
+        harness = model_log_text(raw_engine.get("harness")) or engine
+        access = model_log_text(raw_engine.get("access")) or "unknown"
+        default_key = model_log_text(raw_engine.get("default_model_key"))
+        if default_key:
+            defaults[engine] = default_key
+        engine_meta[engine] = ModelIdentity(
+            model_display=engine,
+            harness=harness,
+            access=access,
+            confidence="engine",
+            source="",
+        )
+        models_raw = raw_engine.get("models", {})
+        if not isinstance(models_raw, dict):
+            continue
+        for model_key_raw, raw_model in models_raw.items():
+            if not isinstance(raw_model, dict):
+                continue
+            model_key = str(model_key_raw).strip()
+            if not model_key:
+                continue
+            identities[(engine, model_key)] = ModelIdentity(
+                model_display=model_log_text(raw_model.get("display")) or model_key,
+                harness=harness,
+                access=access,
+                confidence=model_log_text(raw_model.get("confidence")),
+                source=model_log_text(raw_model.get("source")),
+            )
+    return ModelIdentityRegistry(identities, defaults, engine_meta)
+
+
+def model_log_row_engine(row: dict[str, Any]) -> str:
+    return model_log_text(row.get("worker_engine") if "worker_engine" in row else row.get("engine"))
+
+
+def row_identity_fields(row: dict[str, Any], registry: ModelIdentityRegistry) -> dict[str, str]:
+    identity = registry.resolve(model_log_row_engine(row), model_log_text(row.get("model")))
+    return {
+        "model_display": identity.model_display,
+        "harness": identity.harness,
+        "access": identity.access,
+    }
+
+
+def task_final_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    finals: list[dict[str, Any]] = []
+    for task_rows in group_model_log_tasks(rows):
+        ordered = sorted(
+            task_rows,
+            key=lambda row: (
+                model_log_text(row.get("logged_at")),
+                1 if model_log_row_is_retry(row) else 0,
+            ),
+        )
+        if ordered:
+            finals.append(ordered[-1])
+    return finals
+
+
+def enrich_model_groups_with_identity(
+    groups: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    registry: ModelIdentityRegistry,
+    *,
+    include_task_type: bool,
+) -> list[dict[str, Any]]:
+    identity_rows: dict[tuple[str, str] | tuple[str], dict[str, str]] = {}
+    latest: dict[tuple[str, str] | tuple[str], str] = {}
+    for row in task_final_rows(rows):
+        group_model = model_log_row_model(row)
+        group_task_type = model_log_row_task_type(row)
+        key: tuple[str, str] | tuple[str]
+        key = (group_model, group_task_type) if include_task_type else (group_model,)
+        logged_at = model_log_text(row.get("logged_at"))
+        if key not in latest or logged_at >= latest[key]:
+            latest[key] = logged_at
+            identity_rows[key] = row_identity_fields(row, registry)
+    enriched: list[dict[str, Any]] = []
+    for group in groups:
+        key = (
+            (str(group.get("model") or ""), str(group.get("task_type") or ""))
+            if include_task_type
+            else (str(group.get("model") or ""),)
+        )
+        item = dict(group)
+        item.update(
+            identity_rows.get(
+                key,
+                {
+                    "model_display": str(group.get("model") or ""),
+                    "harness": "unknown",
+                    "access": "unknown",
+                },
+            )
+        )
+        enriched.append(item)
+    return enriched
+
+
+def ensure_sqlite_available() -> Any:
+    if sqlite3 is None:
+        raise RuntimeError("sqlite3 is unavailable")
+    return sqlite3
+
+
+def connect_read_model_db(path: Path) -> Any:
+    sqlite = ensure_sqlite_available()
+    path = path.expanduser().resolve()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite.connect(str(path))
+    conn.row_factory = sqlite.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA journal_mode=WAL")
+    return conn
+
+
+def connect_read_model_db_readonly(path: Path) -> Any:
+    sqlite = ensure_sqlite_available()
+    path = path.expanduser().resolve()
+    if not path.exists():
+        raise RuntimeError(f"read model database missing: {path}")
+    uri_path = urllib.parse.quote(path.as_posix(), safe="/")
+    conn = sqlite.connect(f"file:{uri_path}?mode=ro", uri=True)
+    conn.row_factory = sqlite.Row
+    conn.execute("PRAGMA busy_timeout=5000")
+    return conn
+
+
+def read_model_table_exists(conn: Any, name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (name,),
+    ).fetchone()
+    return row is not None
+
+
+def create_read_model_schema(conn: Any) -> None:
+    schema_table_exists = read_model_table_exists(conn, "schema_version")
+    user_version = int(conn.execute("PRAGMA user_version").fetchone()[0] or 0)
+    schema_version = None
+    if schema_table_exists:
+        row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+        if row is not None:
+            schema_version = int(row[0])
+    needs_stamp = user_version != 1 or schema_version != 1
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS attempts (
+            id INTEGER PRIMARY KEY,
+            run_id TEXT,
+            task_key TEXT,
+            logged_at TEXT,
+            engine TEXT,
+            model TEXT,
+            task_type TEXT,
+            retry INTEGER,
+            verdict TEXT,
+            duration_ms INTEGER,
+            worker_tokens INTEGER,
+            orchestrator TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_attempts_model_task_type
+            ON attempts(model, task_type);
+        CREATE INDEX IF NOT EXISTS idx_attempts_logged_at
+            ON attempts(logged_at);
+
+        CREATE TABLE IF NOT EXISTS catalog_models (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            context_length INTEGER,
+            prompt_per_m REAL,
+            completion_per_m REAL,
+            free INTEGER,
+            variable_pricing INTEGER,
+            pricing_unknown INTEGER,
+            fetched_at TEXT,
+            modality TEXT
+        );
+        CREATE TABLE IF NOT EXISTS catalog_events (
+            id INTEGER PRIMARY KEY,
+            ts TEXT,
+            kind TEXT,
+            model_id TEXT,
+            payload TEXT
+        );
+        CREATE TABLE IF NOT EXISTS identity (
+            engine TEXT NOT NULL,
+            model_key TEXT NOT NULL,
+            model_display TEXT,
+            harness TEXT,
+            access TEXT,
+            confidence TEXT,
+            source TEXT,
+            PRIMARY KEY (engine, model_key)
+        );
+        CREATE TABLE IF NOT EXISTS identity_defaults (
+            engine TEXT PRIMARY KEY,
+            default_model_key TEXT,
+            harness TEXT,
+            access TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sync_state (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+        """
+    )
+    if needs_stamp:
+        conn.executescript(
+            """
+            DELETE FROM schema_version;
+            INSERT INTO schema_version(version) VALUES (1);
+            PRAGMA user_version = 1;
+            """
+        )
+
+
+def drop_read_model_tables(conn: Any) -> None:
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS attempts;
+        DROP TABLE IF EXISTS catalog_models;
+        DROP TABLE IF EXISTS catalog_events;
+        DROP TABLE IF EXISTS identity;
+        DROP TABLE IF EXISTS identity_defaults;
+        DROP TABLE IF EXISTS sync_state;
+        DROP TABLE IF EXISTS schema_version;
+        """
+    )
+
+
+def read_log_rows_from_offset(path: Path, offset: int) -> tuple[list[dict[str, Any]], int, int]:
+    rows: list[dict[str, Any]] = []
+    skipped = 0
+    final_offset = offset
+    try:
+        with path.open("rb") as fh:
+            fh.seek(offset)
+            while True:
+                line_start = fh.tell()
+                raw_line = fh.readline()
+                if not raw_line:
+                    break
+                if not raw_line.endswith(b"\n"):
+                    final_offset = line_start
+                    break
+                final_offset = fh.tell()
+                try:
+                    line = raw_line.decode("utf-8")
+                    row = json.loads(line)
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    skipped += 1
+                    continue
+                if not isinstance(row, dict):
+                    skipped += 1
+                    continue
+                rows.append(row)
+    except FileNotFoundError:
+        return [], 0, 0
+    return rows, skipped, final_offset
+
+
+def read_catalog_events_from_offset(path: Path, offset: int) -> tuple[list[dict[str, Any]], int]:
+    events: list[dict[str, Any]] = []
+    final_offset = offset
+    try:
+        with path.expanduser().open("rb") as fh:
+            fh.seek(offset)
+            while True:
+                line_start = fh.tell()
+                raw_line = fh.readline()
+                if not raw_line:
+                    break
+                if not raw_line.endswith(b"\n"):
+                    final_offset = line_start
+                    break
+                final_offset = fh.tell()
+                try:
+                    event = json.loads(raw_line.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                if isinstance(event, dict):
+                    events.append(event)
+    except FileNotFoundError:
+        return [], 0
+    return events, final_offset
+
+
+def insert_attempt_rows(conn: Any, rows: list[dict[str, Any]]) -> int:
+    payloads: list[tuple[Any, ...]] = []
+    for row in rows:
+        payloads.append(
+            (
+                model_log_text(row.get("run_id")),
+                model_log_text(row.get("task_key")),
+                model_log_text(row.get("logged_at")),
+                model_log_row_engine(row),
+                model_log_text(row.get("model")),
+                model_log_text(row.get("task_type")),
+                1 if model_log_row_is_retry(row) else 0,
+                model_log_text(row.get("verdict")),
+                model_log_int(row.get("duration_ms")),
+                model_log_int(row.get("worker_tokens")),
+                model_log_text(row.get("orchestrator")),
+            )
+        )
+    if payloads:
+        conn.executemany(
+            """
+            INSERT INTO attempts (
+                run_id, task_key, logged_at, engine, model, task_type, retry,
+                verdict, duration_ms, worker_tokens, orchestrator
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            payloads,
+        )
+    return len(payloads)
+
+
+def read_sync_state_value(conn: Any, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM sync_state WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return None
+    return str(row["value"])
+
+
+def read_sync_state_int(conn: Any, key: str, default: int = 0) -> int:
+    value = read_sync_state_value(conn, key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def write_sync_state_values(conn: Any, values: dict[str, int | str]) -> None:
+    conn.executemany(
+        "INSERT OR REPLACE INTO sync_state(key, value) VALUES (?, ?)",
+        [(key, str(value)) for key, value in values.items()],
+    )
+
+
+def file_sync_metadata(path: Path) -> tuple[int, int]:
+    try:
+        stat = path.expanduser().stat()
+    except FileNotFoundError:
+        return -1, 0
+    return int(stat.st_mtime_ns), int(stat.st_size)
+
+
+def insert_catalog_event_rows(conn: Any, events: list[dict[str, Any]]) -> int:
+    event_payloads: list[tuple[Any, ...]] = []
+    for event in events:
+        event_payloads.append(
+            (
+                model_log_text(event.get("ts")),
+                model_log_text(event.get("kind")),
+                model_log_text(event.get("id")),
+                json.dumps(event, sort_keys=True),
+            )
+        )
+    if event_payloads:
+        conn.executemany(
+            "INSERT INTO catalog_events(ts, kind, model_id, payload) VALUES (?, ?, ?, ?)",
+            event_payloads,
+        )
+    return len(event_payloads)
+
+
+def refresh_catalog_tables(conn: Any, catalog_path: Path) -> None:
+    catalog_path = catalog_path.expanduser().resolve()
+    changes_path = catalog_changes_path(catalog_path)
+    catalog_mtime, catalog_size = file_sync_metadata(catalog_path)
+    changes_mtime, changes_size = file_sync_metadata(changes_path)
+    catalog_unchanged = (
+        read_sync_state_int(conn, "catalog_snapshot_mtime_ns", -2) == catalog_mtime
+        and read_sync_state_int(conn, "catalog_snapshot_size", -2) == catalog_size
+    )
+    changes_unchanged = (
+        read_sync_state_int(conn, "catalog_changes_mtime_ns", -2) == changes_mtime
+        and read_sync_state_int(conn, "catalog_changes_size", -2) == changes_size
+    )
+    if catalog_unchanged and changes_unchanged:
+        return
+
+    if not catalog_unchanged:
+        conn.execute("DELETE FROM catalog_models")
+        try:
+            catalog_models = load_catalog_snapshot(catalog_path)
+        except (OSError, json.JSONDecodeError, ValueError):
+            catalog_models = []
+        payloads: list[tuple[Any, ...]] = []
+        for model in catalog_models:
+            normalized = normalize_catalog_for_scoreboard(model)
+            model_id = model_log_text(normalized.get("id"))
+            if not model_id:
+                continue
+            payloads.append(
+                (
+                    model_id,
+                    model_log_text(normalized.get("name")),
+                    model_log_int(normalized.get("context_length")),
+                    normalized.get("prompt_per_m"),
+                    normalized.get("completion_per_m"),
+                    1 if normalized.get("free") else 0,
+                    1 if normalized.get("variable_pricing") else 0,
+                    1 if normalized.get("pricing_unknown") else 0,
+                    model_log_text(normalized.get("fetched_at")),
+                    model_log_text(normalized.get("modality")),
+                )
+            )
+        if payloads:
+            conn.executemany(
+                """
+                INSERT INTO catalog_models (
+                    id, name, context_length, prompt_per_m, completion_per_m, free,
+                    variable_pricing, pricing_unknown, fetched_at, modality
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                payloads,
+            )
+        write_sync_state_values(
+            conn,
+            {
+                "catalog_snapshot_mtime_ns": catalog_mtime,
+                "catalog_snapshot_size": catalog_size,
+            },
+        )
+
+    if not changes_unchanged:
+        previous_changes_mtime = read_sync_state_value(conn, "catalog_changes_mtime_ns")
+        previous_changes_size = read_sync_state_int(conn, "catalog_changes_size", 0)
+        previous_offset = read_sync_state_int(conn, "catalog_changes_offset", 0)
+        append_only = (
+            previous_changes_mtime is not None
+            and changes_size >= previous_changes_size
+            and previous_offset <= changes_size
+        )
+        if append_only:
+            events, new_offset = read_catalog_events_from_offset(changes_path, previous_offset)
+        else:
+            conn.execute("DELETE FROM catalog_events")
+            events, new_offset = read_catalog_events_from_offset(changes_path, 0)
+        insert_catalog_event_rows(conn, events)
+        write_sync_state_values(
+            conn,
+            {
+                "catalog_changes_mtime_ns": changes_mtime,
+                "catalog_changes_size": changes_size,
+                "catalog_changes_offset": new_offset,
+            },
+        )
+
+
+def refresh_identity_tables(conn: Any, registry_path: Path) -> None:
+    registry = load_model_identity_registry(registry_path)
+    conn.execute("DELETE FROM identity")
+    conn.execute("DELETE FROM identity_defaults")
+    if registry.identities:
+        conn.executemany(
+            """
+            INSERT INTO identity (
+                engine, model_key, model_display, harness, access, confidence, source
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    engine,
+                    model_key,
+                    identity.model_display,
+                    identity.harness,
+                    identity.access,
+                    identity.confidence,
+                    identity.source,
+                )
+                for (engine, model_key), identity in sorted(registry.identities.items())
+            ],
+        )
+    if registry.engine_meta:
+        conn.executemany(
+            """
+            INSERT INTO identity_defaults(engine, default_model_key, harness, access)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                (
+                    engine,
+                    registry.defaults.get(engine, ""),
+                    identity.harness,
+                    identity.access,
+                )
+                for engine, identity in sorted(registry.engine_meta.items())
+            ],
+        )
+
+
+@dataclass(frozen=True)
+class ReadModelSyncResult:
+    db_path: Path
+    log_path: Path
+    attempts_inserted: int
+    skipped: int
+    offset: int
+    rebuilt: bool
+
+
+def rebuild_read_model_db(
+    db_path: Path,
+    log_path: Path,
+    *,
+    catalog_path: Path | None = None,
+    registry_path: Path | None = None,
+) -> ReadModelSyncResult:
+    db_path = db_path.expanduser().resolve()
+    log_path = log_path.expanduser().resolve()
+    catalog_path = (catalog_path or default_catalog_path()).expanduser().resolve()
+    registry_path = (registry_path or default_model_registry_path()).expanduser().resolve()
+    with contextlib.closing(connect_read_model_db(db_path)) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            drop_read_model_tables(conn)
+            create_read_model_schema(conn)
+            rows, skipped, offset = read_log_rows_from_offset(log_path, 0)
+            inserted = insert_attempt_rows(conn, rows)
+            refresh_catalog_tables(conn, catalog_path)
+            refresh_identity_tables(conn, registry_path)
+            write_sync_state_values(conn, {"log_offset": offset})
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return ReadModelSyncResult(db_path, log_path, inserted, skipped, offset, True)
+
+
+def sync_read_model_db(
+    db_path: Path,
+    log_path: Path,
+    *,
+    catalog_path: Path | None = None,
+    registry_path: Path | None = None,
+) -> ReadModelSyncResult:
+    db_path = db_path.expanduser().resolve()
+    log_path = log_path.expanduser().resolve()
+    catalog_path = (catalog_path or default_catalog_path()).expanduser().resolve()
+    registry_path = (registry_path or default_model_registry_path()).expanduser().resolve()
+    try:
+        log_size = log_path.stat().st_size
+    except FileNotFoundError:
+        log_size = 0
+    with contextlib.closing(connect_read_model_db(db_path)) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            create_read_model_schema(conn)
+            offset = read_sync_state_int(conn, "log_offset", 0)
+            if log_size < offset:
+                conn.rollback()
+                return rebuild_read_model_db(
+                    db_path,
+                    log_path,
+                    catalog_path=catalog_path,
+                    registry_path=registry_path,
+                )
+            rows, skipped, new_offset = read_log_rows_from_offset(log_path, offset)
+            inserted = insert_attempt_rows(conn, rows)
+            refresh_catalog_tables(conn, catalog_path)
+            refresh_identity_tables(conn, registry_path)
+            write_sync_state_values(conn, {"log_offset": new_offset})
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return ReadModelSyncResult(db_path, log_path, inserted, skipped, new_offset, False)
+
+
+def load_identity_registry_from_db(conn: Any) -> ModelIdentityRegistry:
+    identities: dict[tuple[str, str], ModelIdentity] = {}
+    defaults: dict[str, str] = {}
+    engine_meta: dict[str, ModelIdentity] = {}
+    for row in conn.execute("SELECT * FROM identity"):
+        engine = model_log_text(row["engine"])
+        model_key = model_log_text(row["model_key"])
+        if not engine or not model_key:
+            continue
+        identities[(engine, model_key)] = ModelIdentity(
+            model_display=model_log_text(row["model_display"]) or model_key,
+            harness=model_log_text(row["harness"]) or engine,
+            access=model_log_text(row["access"]) or "unknown",
+            confidence=model_log_text(row["confidence"]),
+            source=model_log_text(row["source"]),
+        )
+    for row in conn.execute("SELECT * FROM identity_defaults"):
+        engine = model_log_text(row["engine"])
+        if not engine:
+            continue
+        defaults[engine] = model_log_text(row["default_model_key"])
+        engine_meta[engine] = ModelIdentity(
+            model_display=engine,
+            harness=model_log_text(row["harness"]) or engine,
+            access=model_log_text(row["access"]) or "unknown",
+            confidence="engine",
+            source="",
+        )
+    return ModelIdentityRegistry(identities, defaults, engine_meta)
+
+
+def db_attempt_rows(
+    db_path: Path,
+    *,
+    since: str | None = None,
+    engine: str | None = None,
+) -> tuple[list[dict[str, Any]], ModelIdentityRegistry]:
+    with contextlib.closing(connect_read_model_db_readonly(db_path)) as conn:
+        query = """
+            SELECT run_id, task_key, logged_at, engine, model, task_type, retry,
+                   verdict, duration_ms, worker_tokens, orchestrator
+            FROM attempts
+        """
+        params: list[Any] = []
+        if engine is not None:
+            query += " WHERE engine = ?"
+            params.append(engine)
+        query += " ORDER BY id"
+        rows = [
+            {
+                "run_id": row["run_id"],
+                "task_key": row["task_key"],
+                "logged_at": row["logged_at"],
+                "worker_engine": row["engine"],
+                "model": row["model"],
+                "task_type": row["task_type"],
+                "retry": bool(row["retry"]),
+                "verdict": row["verdict"],
+                "duration_ms": row["duration_ms"],
+                "worker_tokens": row["worker_tokens"],
+                "orchestrator": row["orchestrator"],
+            }
+            for row in conn.execute(query, params)
+        ]
+        registry = load_identity_registry_from_db(conn)
+    if since is not None:
+        selected_row_ids: set[int] = set()
+        for task_rows in group_model_log_tasks(rows):
+            ordered = sorted(
+                task_rows,
+                key=lambda row: (
+                    model_log_text(row.get("logged_at")),
+                    1 if model_log_row_is_retry(row) else 0,
+                ),
+            )
+            final_date = parse_log_date(ordered[-1].get("logged_at"))
+            if final_date and final_date >= since:
+                selected_row_ids.update(id(row) for row in task_rows)
+        rows = [row for row in rows if id(row) in selected_row_ids]
+    return rows, registry
+
+
+def db_catalog_models(db_path: Path) -> list[dict[str, Any]]:
+    with contextlib.closing(connect_read_model_db_readonly(db_path)) as conn:
+        rows = [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "context_length": row["context_length"],
+                "prompt_per_m": row["prompt_per_m"],
+                "completion_per_m": row["completion_per_m"],
+                "free": bool(row["free"]),
+                "variable_pricing": bool(row["variable_pricing"]),
+                "pricing_unknown": bool(row["pricing_unknown"]),
+                "fetched_at": row["fetched_at"],
+                "modality": row["modality"],
+            }
+            for row in conn.execute("SELECT * FROM catalog_models ORDER BY id")
+        ]
+        return rows
+
+
+def db_catalog_events(db_path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
+    with contextlib.closing(connect_read_model_db_readonly(db_path)) as conn:
+        rows = conn.execute(
+            "SELECT payload FROM catalog_events ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            event = json.loads(row["payload"])
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    return events
+
+
+def run_db_command(config: AppConfig, args: argparse.Namespace) -> int:
+    db_path = (args.db or default_read_model_db_path()).expanduser().resolve()
+    log_path = (args.log or config.eval.jsonl_path).expanduser().resolve()
+    catalog_path = (getattr(args, "catalog_file", None) or default_catalog_path()).expanduser().resolve()
+    registry_path = (getattr(args, "registry", None) or default_model_registry_path()).expanduser().resolve()
+    if args.db_command == "rebuild":
+        result = rebuild_read_model_db(
+            db_path,
+            log_path,
+            catalog_path=catalog_path,
+            registry_path=registry_path,
+        )
+    else:
+        result = sync_read_model_db(
+            db_path,
+            log_path,
+            catalog_path=catalog_path,
+            registry_path=registry_path,
+        )
+    action = "rebuild" if result.rebuilt else "sync"
+    print(
+        f"db {action}: {result.db_path} "
+        f"attempts={result.attempts_inserted} skipped={result.skipped} offset={result.offset}"
+    )
+    return 0
+
+
 def normalize_notes_match_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().lower()
 
@@ -4453,14 +5604,56 @@ def model_judgment_notes(model_id: str, notes_sections: dict[str, list[str]]) ->
     return max(matches, key=lambda item: (item[0], item[1], item[2]))[3]
 
 
-def render_notes_list(items: list[str]) -> str:
+def strip_inline_markdown(value: str) -> str:
+    text = re.sub(r"`([^`]*)`", r"\1", value)
+    text = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
+    text = re.sub(r"[*_]{1,3}([^*_]+)[*_]{1,3}", r"\1", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def normalized_judgment_note(item: str) -> tuple[str, str] | None:
+    text = re.sub(r"\s+", " ", item).strip()
+    match = re.match(r"^-?\s*(\d{4}-\d{2}-\d{2})\s+(?:[-\u2013\u2014]+\s*)?(.*)$", text)
+    if not match:
+        return None
+    body = strip_inline_markdown(match.group(2))
+    if not body:
+        return None
+    date = humanized_log_date(match.group(1))
+    short_date = re.sub(r",\s*\d{4}$", "", date)
+    return short_date, body
+
+
+def note_date_key(item: str) -> str:
+    match = re.search(r"\b\d{4}-\d{2}-\d{2}\b", item)
+    return match.group(0) if match else ""
+
+
+def render_notes_list(items: list[str], *, notes_path: Path | None = None, limit: int = 5) -> str:
     if not items:
         return '<p class="empty-note">no judgment notes yet</p>'
+    ordered_items = sorted(items, key=note_date_key, reverse=True)
     rendered = []
-    for item in items:
-        text = "<br>".join(html_escape(line) for line in item.splitlines() if line.strip())
-        rendered.append(f"<li>{text}</li>")
-    return f'<ul class="notes-list">{"".join(rendered)}</ul>'
+    for item in ordered_items[:limit]:
+        note = normalized_judgment_note(item)
+        if note is None:
+            body = strip_inline_markdown(item)
+            if not body:
+                continue
+            rendered.append(f"<li><span>{html_escape(body)}</span></li>")
+            continue
+        date, body = note
+        rendered.append(
+            f'<li><time>{html_escape(date)}</time><span>{html_escape(body)}</span></li>'
+        )
+    if not rendered:
+        return '<p class="empty-note">no judgment notes yet</p>'
+    more = ""
+    if len(ordered_items) > limit and notes_path is not None:
+        more = (
+            f'<li class="more-notes">{source_file_link(notes_path, "more in model notes")}</li>'
+        )
+    return f'<ul class="notes-list">{"".join(rendered)}{more}</ul>'
 
 
 def normalize_catalog_for_scoreboard(model: dict[str, Any]) -> dict[str, Any]:
@@ -4665,32 +5858,160 @@ def fmt_task_cost(value: float | None) -> str:
     return f"${value:.2f}/task"
 
 
-def catalog_cost_html(row: dict[str, Any], catalog_model: dict[str, Any] | None) -> str:
+def fmt_short_task_cost(value: float | None) -> str:
+    if value is None:
+        return "in plan"
+    if value == 0:
+        return "free"
+    if value < 0.10:
+        cents = value * 100
+        if cents < 1:
+            return "<1¢"
+        rounded = round(cents)
+        return f"~{rounded}¢"
+    return f"${value:.2f}"
+
+
+def humanized_log_date(value: Any, *, prefix: str = "") -> str:
+    text = model_log_text(value)
+    if not text:
+        return f"{prefix}unknown" if prefix else "unknown"
+    candidate = text[:10]
+    try:
+        dt = datetime.strptime(candidate, "%Y-%m-%d")
+    except ValueError:
+        return f"{prefix}{text}" if prefix else text
+    rendered = f"{dt.strftime('%B')} {dt.day}, {dt.year}"
+    return f"{prefix}{rendered}" if prefix else rendered
+
+
+def humanize_dates_in_text(value: str) -> str:
+    return re.sub(
+        r"\b\d{4}-\d{2}-\d{2}\b",
+        lambda match: humanized_log_date(match.group(0)),
+        value,
+    )
+
+
+def source_file_link(path: Path, label: str) -> str:
+    resolved = path.expanduser().resolve()
+    return (
+        f'<a class="source-link" href="{html_escape(file_href(resolved))}" '
+        f'title="{html_escape(str(resolved))}">{html_escape(label)}</a>'
+    )
+
+
+def model_task_cost_label(row: dict[str, Any], catalog_model: dict[str, Any] | None) -> str:
     median_tokens = row.get("median_tokens")
-    if catalog_model is None:
-        if median_tokens is None:
-            return '<span class="cost-line">included in plan</span>'
-        return '<span class="cost-line muted">catalog missing</span>'
     if median_tokens is None:
-        return '<span class="cost-line">included in plan</span>'
+        return "in plan"
+    if catalog_model is None:
+        return "catalog missing"
     if catalog_model.get("free"):
-        return '<span class="flag free">FREE</span>'
-    variable = bool(catalog_model.get("variable_pricing"))
-    in_price = format_catalog_price(catalog_model.get("prompt_per_m"), variable=variable)
-    out_price = format_catalog_price(catalog_model.get("completion_per_m"), variable=variable)
-    if variable:
-        pieces = [f'<span class="cost-line">{html_escape(in_price)} $/M in · {html_escape(out_price)} $/M out</span>']
+        return "free"
+    if catalog_model.get("variable_pricing"):
+        return "var"
+    return fmt_short_task_cost(estimated_task_cost(row, catalog_model))
+
+
+def rate_bar_html(value: Any) -> str:
+    try:
+        pct = max(0.0, min(100.0, float(value) * 100))
+    except (TypeError, ValueError):
+        pct = 0.0
+    return (
+        '<span class="rate-meter" aria-hidden="true">'
+        f'<span class="rate-bar bar-fill" style="width: {pct:.0f}%"></span>'
+        "</span>"
+    )
+
+
+def rate_cell_html(value: Any) -> str:
+    return (
+        f'<span class="rate-value">{html_escape(fmt_percent(value))}</span>'
+        f"{rate_bar_html(value)}"
+    )
+
+
+def compact_context_label(value: Any) -> str:
+    try:
+        ctx = int(value)
+    except (TypeError, ValueError):
+        return "unknown ctx"
+    if ctx >= 1_000_000 and ctx % 1_000_000 == 0:
+        return f"{ctx // 1_000_000}M ctx"
+    if ctx >= 1_000:
+        if ctx % 1_000 == 0:
+            return f"{ctx // 1_000}K ctx"
+        return f"{ctx / 1000:.1f}K ctx"
+    return f"{ctx} ctx"
+
+
+def short_model_name(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "unknown"
+    text = text.removeprefix("openrouter/")
+    text = text.removesuffix(":free")
+    if "/" in text:
+        text = text.rsplit("/", 1)[-1]
+    text = re.sub(r"[-_]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return "unknown"
+    parts = []
+    for part in text.split():
+        parts.append(part.upper() if part.lower() in {"gpt", "glm", "ai", "llm"} else part.capitalize())
+    return " ".join(parts)
+
+
+def catalog_model_display_name(model: dict[str, Any]) -> str:
+    name = str(model.get("name") or "").strip()
+    model_id = str(model.get("id") or "").strip()
+    if name and name != model_id:
+        return name.removesuffix(" (free)").strip()
+    return short_model_name(model_id)
+
+
+def humanized_short_date(value: Any) -> str:
+    return re.sub(r",\s*\d{4}$", "", humanized_log_date(value))
+
+
+def humanized_catalog_event_line(event: dict[str, Any], catalog_by_id: dict[str, dict[str, Any]]) -> str:
+    model_id = str(event.get("id") or "")
+    if model_id in catalog_by_id:
+        label = catalog_model_display_name(catalog_by_id[model_id])
     else:
-        pieces = [f'<span class="cost-line">${html_escape(in_price)}/M in · ${html_escape(out_price)}/M out</span>']
-    if catalog_model.get("free"):
-        pieces.append('<span class="flag free">FREE</span>')
-    if variable:
-        pieces.append('<span class="flag">var</span>')
-    est = estimated_task_cost(row, catalog_model)
-    est_text = fmt_task_cost(est)
-    if est_text:
-        pieces.append(f'<span class="cost-line">{html_escape(est_text)}</span>')
-    return " ".join(pieces)
+        label = short_model_name(model_id)
+    kind = str(event.get("kind") or "event")
+    date = humanized_short_date(event.get("ts"))
+    if kind == "went_free":
+        action = "went free"
+    elif kind == "went_paid":
+        action = "went paid"
+    elif kind == "pricing_variable":
+        action = "moved to variable pricing"
+    elif kind == "pricing_fixed":
+        action = "returned to fixed pricing"
+    elif kind == "added":
+        action = "was added"
+    elif kind == "removed":
+        action = "was removed"
+    else:
+        action = kind.replace("_", " ")
+    return f"{label} {action} — {date}"
+
+
+def watchlist_chip_html(model: dict[str, Any]) -> str:
+    model_id = str(model.get("id") or "").strip()
+    label = catalog_model_display_name(model)
+    context = compact_context_label(model.get("context_length"))
+    title = model_id or label
+    return (
+        '<li class="watch-chip">'
+        f'<span data-model="{html_escape(model_id)}" title="{html_escape(title)}">'
+        f"{html_escape(label)} · {html_escape(context)}</span></li>"
+    )
 
 
 def derived_quality_text(row: dict[str, Any], *, best: bool) -> str:
@@ -4718,9 +6039,9 @@ def render_task_breakdown_table(task_rows: list[dict[str, Any]]) -> str:
         rows.append(
             f"""<tr>
       <td>{html_escape(str(item.get("task_type") or ""))}</td>
-      <td class="mono">{fmt_int(item.get("tasks"))}</td>
-      <td class="mono">{fmt_percent(item.get("first_try_pass_rate"))}</td>
-      <td class="mono">{fmt_percent(item.get("pass_rate"))}</td>
+      <td class="num">{fmt_int(item.get("tasks"))}</td>
+      <td class="num rate-cell">{rate_cell_html(item.get("first_try_pass_rate"))}</td>
+      <td class="num rate-cell">{rate_cell_html(item.get("pass_rate"))}</td>
     </tr>"""
         )
     return f"""<table class="breakdown">
@@ -4730,98 +6051,214 @@ def render_task_breakdown_table(task_rows: list[dict[str, Any]]) -> str:
 
 
 MODEL_SCOREBOARD_CSS = """
-  .scoreboard-page { max-width: 1180px; }
-  .scoreboard-briefing { max-width: 44ch; }
-  .source-grid {
+  .scoreboard-page { max-width: 1240px; }
+  .scoreboard-header {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-    margin: 0 0 clamp(18px, 3vw, 28px);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 18px;
+    align-items: end;
+    margin-bottom: clamp(14px, 2.5vw, 22px);
   }
-  .source-box {
-    border: 1px solid var(--hairline);
-    background: color-mix(in srgb, var(--surface) 76%, transparent);
-    padding: 12px;
-    min-width: 0;
+  .scoreboard-title {
+    margin: 0;
+    font-size: clamp(28px, 5vw, 54px);
+    line-height: .98;
+    letter-spacing: 0;
+    text-wrap: balance;
   }
-  .source-box b { display: block; font-size: 12px; color: var(--muted); }
-  .source-box span { display: block; overflow-wrap: anywhere; }
+  .scoreboard-meta {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-wrap: wrap;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .source-links {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .source-link {
+    color: var(--ink);
+    text-decoration: none;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .source-link:hover { border-bottom-color: var(--ink); }
   .watchlist {
     border-top: 1px solid var(--hairline);
     border-bottom: 1px solid var(--hairline);
-    padding: 14px 0;
-    margin: 0 0 18px;
+    padding: 12px 0;
+    margin: 0 0 clamp(18px, 3vw, 28px);
+    color: var(--muted);
+    font-size: 13px;
   }
-  .watchlist h2, .models h2 {
-    margin: 0 0 10px;
-    font-size: 16px;
-  }
-  .watch-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: 16px;
-  }
-  .tag-list {
+  .watchline {
     display: flex;
+    align-items: center;
+    gap: 10px;
     flex-wrap: wrap;
-    gap: 8px;
+  }
+  .watch-title { color: var(--ink); font-weight: 650; }
+  .watch-chips, .event-list {
+    display: contents;
     margin: 0;
     padding: 0;
     list-style: none;
   }
-  .tag-list li, .flag {
+  .watch-chip {
     border: 1px solid var(--hairline);
-    padding: 3px 7px;
+    padding: 3px 7px 4px;
     font-size: 12px;
     color: var(--ink);
     background: rgba(255, 255, 255, .03);
   }
-  .flag.free { color: var(--pass); border-color: color-mix(in srgb, var(--pass) 55%, var(--hairline)); }
-  .event-list { margin: 0; padding-left: 18px; color: var(--muted); }
-  .model-card {
+  .event-list li {
+    color: var(--muted);
+  }
+  .event-list li::before {
+    content: "/";
+    color: var(--hairline);
+    margin: 0 8px 0 2px;
+  }
+  .table-scroll {
+    overflow-x: auto;
     border: 1px solid var(--hairline);
-    background: var(--surface);
-    margin: 12px 0;
+    border-left: 0;
+    border-right: 0;
   }
-  .model-summary {
-    display: grid;
-    grid-template-columns: minmax(70px, .45fr) minmax(240px, 1.6fr) minmax(180px, .9fr) minmax(170px, .9fr);
-    gap: 12px;
-    padding: 14px;
-    align-items: start;
-  }
-  .rank { font-size: 24px; font-weight: 800; line-height: 1; }
-  .tier { color: var(--muted); font-size: 13px; margin-top: 4px; }
-  .model-name { font-size: 19px; font-weight: 800; overflow-wrap: anywhere; }
-  .metric-row {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-    margin-top: 8px;
-    color: var(--muted);
+  .ranked-table {
+    width: 100%;
+    min-width: 1040px;
+    border-collapse: collapse;
     font-size: 13px;
   }
-  .metric-row b { color: var(--ink); }
-  .cost-line { display: inline-block; margin: 0 8px 6px 0; }
-  .quality {
+  .ranked-table th {
     color: var(--muted);
-    font-size: 13px;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--hairline);
+    white-space: nowrap;
   }
-  .quality b { color: var(--ink); }
+  .ranked-table td {
+    padding: 17px 12px;
+    border-bottom: 1px solid var(--hairline);
+    vertical-align: middle;
+    color: var(--ink);
+  }
+  .ranked-table tr.model-row:hover td {
+    background: color-mix(in srgb, var(--surface) 48%, transparent);
+  }
+  .rank-cell {
+    width: 58px;
+    font-size: 16px;
+    font-weight: 760;
+  }
+  .model-cell { min-width: 230px; }
+  .model-name {
+    font-size: 16px;
+    font-weight: 760;
+    line-height: 1.2;
+    overflow-wrap: anywhere;
+  }
+  .model-id {
+    margin-top: 3px;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+  }
+  .tier-badge {
+    display: inline-flex;
+    align-items: center;
+    min-width: 78px;
+    justify-content: center;
+    padding: 3px 8px 4px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--ink);
+    border: 1px solid transparent;
+  }
+  .tier-badge.proven {
+    background: color-mix(in srgb, var(--pass) 30%, transparent);
+    border-color: color-mix(in srgb, var(--pass) 58%, var(--hairline));
+  }
+  .tier-badge.probation {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 48%, var(--hairline));
+  }
+  .num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .rate-cell {
+    min-width: 108px;
+  }
+  .rate-value {
+    display: inline-block;
+    min-width: 38px;
+  }
+  .rate-meter {
+    display: inline-block;
+    width: 48px;
+    height: 6px;
+    margin-left: 8px;
+    vertical-align: 1px;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--muted) 22%, transparent);
+    overflow: hidden;
+  }
+  .rate-bar {
+    display: block;
+    height: 100%;
+    border-radius: 4px;
+    background: var(--pass);
+  }
+  .detail-row td {
+    padding: 0;
+    background: color-mix(in srgb, var(--surface) 55%, transparent);
+  }
   .model-detail {
-    border-top: 1px solid var(--hairline);
-    padding: 0 14px 14px;
+    padding: 0;
   }
   .model-detail summary {
     cursor: pointer;
-    color: var(--accent);
-    padding: 10px 0;
+    color: var(--ink);
+    padding: 11px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .model-detail summary:hover { background: color-mix(in srgb, var(--surface) 70%, transparent); }
+  .detail-content {
+    display: grid;
+    grid-template-columns: minmax(0, .86fr) minmax(260px, 1.14fr);
+    gap: 22px;
+    padding: 16px 12px 20px;
+  }
+  .detail-heading {
+    margin: 0 0 8px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .quality-lines {
+    display: grid;
+    gap: 6px;
+    margin: 12px 0 0;
+    color: var(--muted);
     font-size: 13px;
   }
-  .detail-grid {
-    display: grid;
-    grid-template-columns: minmax(0, .95fr) minmax(0, 1.05fr);
-    gap: 16px;
+  .quality-lines b { color: var(--ink); }
+  .notes-panel {
+    min-width: 0;
   }
   .breakdown {
     width: 100%;
@@ -4830,93 +6267,143 @@ MODEL_SCOREBOARD_CSS = """
   }
   .breakdown th, .breakdown td {
     border-bottom: 1px solid var(--hairline);
-    padding: 7px 6px;
+    padding: 8px 6px;
     text-align: left;
   }
-  .notes-list { margin: 0; padding-left: 18px; color: var(--ink); }
-  .notes-list li { margin: 0 0 8px; }
+  .breakdown th {
+    color: var(--muted);
+    font-weight: 650;
+  }
+  .notes-list {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    color: var(--ink);
+  }
+  .notes-list li {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 12px;
+    align-items: baseline;
+  }
+  .notes-list time {
+    color: var(--muted);
+    font-size: 11px;
+    font-variant-caps: all-small-caps;
+    letter-spacing: .08em;
+    white-space: nowrap;
+  }
+  .more-notes {
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .empty-note { color: var(--muted); margin: 0; }
   .muted { color: var(--muted); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace; }
+  footer.scoreboard-footer {
+    margin-top: 14px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    .watch-chip { background: rgba(255, 255, 255, .035); }
+  }
   @media (max-width: 820px) {
-    .source-grid, .watch-grid, .detail-grid, .model-summary { grid-template-columns: 1fr; }
-    .rank { font-size: 20px; }
+    body { padding: 18px 14px; }
+    .scoreboard-header, .detail-content { grid-template-columns: 1fr; }
+    .scoreboard-meta { justify-content: flex-start; }
+    .table-scroll { margin-left: -14px; margin-right: -14px; padding-left: 14px; }
+    .notes-list li { grid-template-columns: 1fr; gap: 2px; }
   }
 """
 
 
-def render_free_watchlist(catalog_models: list[dict[str, Any]], catalog_path: Path) -> str:
+def render_free_watchlist(
+    catalog_models: list[dict[str, Any]],
+    catalog_path: Path,
+    *,
+    events: list[dict[str, Any]] | None = None,
+) -> str:
     normalized = [normalize_catalog_for_scoreboard(model) for model in catalog_models]
+    catalog_by_id = catalog_models_by_id(normalized)
     free_models = sorted(
         (model for model in normalized if model.get("free")),
         key=lambda item: (-int(item.get("context_length") or 0), str(item.get("id") or "")),
     )
     if free_models:
         free_items = "".join(
-            f"<li>{html_escape(str(model.get('id') or ''))} · {fmt_int(model.get('context_length'))} ctx</li>"
-            for model in free_models[:12]
+            watchlist_chip_html(model)
+            for model in free_models[:6]
         )
     else:
-        free_items = '<li class="muted">no FREE catalog models in the current snapshot</li>'
-    events = read_catalog_events(catalog_changes_path(catalog_path), limit=6)
-    event_items = "".join(f"<li>{html_escape(describe_catalog_event(event))}</li>" for event in events)
+        free_items = '<li class="muted">no free catalog models in the current snapshot</li>'
+    if events is None:
+        events = read_catalog_events(catalog_changes_path(catalog_path), limit=6)
+    event_items = "".join(
+        f"<li>{html_escape(humanized_catalog_event_line(event, catalog_by_id))}</li>"
+        for event in events[:3]
+    )
     if not event_items:
         event_items = '<li class="muted">no catalog change log found</li>'
-    return f"""<section class="watchlist" aria-labelledby="watchlist-heading">
-    <h2 id="watchlist-heading">Free promo watchlist</h2>
-    <div class="watch-grid">
-      <div><ul class="tag-list">{free_items}</ul></div>
-      <div><ol class="event-list">{event_items}</ol></div>
+    return f"""<section class="watchlist" aria-label="free model watchlist">
+    <div class="watchline">
+      <span class="watch-title">{fmt_int(len(free_models))} models free on OpenRouter right now</span>
+      <ul class="watch-chips">{free_items}</ul>
+      <ul class="event-list">{event_items}</ul>
     </div>
   </section>"""
 
 
-def render_model_card(
+def render_model_table_pair(
     row: dict[str, Any],
     *,
     rank: int,
     catalog_model: dict[str, Any] | None,
     notes_sections: dict[str, list[str]],
+    notes_path: Path,
 ) -> str:
     model_id = str(row.get("model") or "")
+    model_display = str(row.get("model_display") or model_id)
+    harness = str(row.get("harness") or "unknown")
+    access = str(row.get("access") or "unknown")
     notes = model_judgment_notes(model_id, notes_sections)
-    median_tokens = "none" if row.get("median_tokens") is None else fmt_int(row.get("median_tokens"))
-    return f"""<article class="model-card" id="model-{html_escape(sanitize_artifact_name(model_id))}">
-  <div class="model-summary">
-    <div>
-      <div class="rank">#{rank}</div>
-      <div class="tier">{html_escape(str(row.get("tier") or ""))}</div>
-    </div>
-    <div>
-      <div class="model-name">{html_escape(model_id)}</div>
-      <div class="metric-row">
-        <span><b>n={fmt_int(row.get("tasks"))}</b> tasks</span>
-        <span><b>{fmt_int(row.get("attempts"))}</b> attempts</span>
-        <span><b>{fmt_int(row.get("retries"))}</b> retries</span>
-        <span><b>{fmt_percent(row.get("first_try_pass_rate"))}</b> first-try</span>
-        <span><b>{fmt_percent(row.get("pass_rate"))}</b> pass</span>
-      </div>
-      <div class="metric-row">
-        <span>last_seen <b>{html_escape(str(row.get("last_seen") or "unknown"))}</b></span>
-        <span>median worker_tokens <b>{html_escape(median_tokens)}</b></span>
-      </div>
-    </div>
-    <div>{catalog_cost_html(row, catalog_model)}</div>
-    <div class="quality">
-      <div><b>Best:</b> {html_escape(derived_quality_text(row, best=True))}</div>
-      <div><b>Worst:</b> {html_escape(derived_quality_text(row, best=False))}</div>
-    </div>
-  </div>
-  <details class="model-detail" open>
-    <summary>usage and judgment notes</summary>
-    <div class="detail-grid">
-      <div>{render_task_breakdown_table(row.get("task_types", []))}</div>
-      <div>
-        <div class="tier">judgment notes from MODEL-NOTES.md</div>
-        {render_notes_list(notes)}
-      </div>
-    </div>
-  </details>
-</article>"""
+    model_id_line = "" if model_id == model_display else f'<div class="model-id">{html_escape(model_id)}</div>'
+    tier = str(row.get("tier") or "")
+    return f"""<tr class="model-row" id="model-{html_escape(sanitize_artifact_name(model_id))}">
+      <td class="rank-cell num">{rank}</td>
+      <td class="model-cell"><div class="model-name">{html_escape(model_display)}</div>{model_id_line}</td>
+      <td>{html_escape(harness)}</td>
+      <td>{html_escape(access)}</td>
+      <td><span class="tier-badge {html_escape(tier)}">{html_escape(tier)}</span></td>
+      <td class="num">{fmt_int(row.get("tasks"))}</td>
+      <td class="num rate-cell">{rate_cell_html(row.get("first_try_pass_rate"))}</td>
+      <td class="num rate-cell">{rate_cell_html(row.get("pass_rate"))}</td>
+      <td class="num">{html_escape(model_task_cost_label(row, catalog_model))}</td>
+      <td>{html_escape(humanized_log_date(row.get("last_seen")))}</td>
+    </tr>
+    <tr class="detail-row">
+      <td colspan="10">
+        <details class="model-detail">
+          <summary>details for {html_escape(model_display)}</summary>
+          <div class="detail-content">
+            <div>
+              <h3 class="detail-heading">Task types</h3>
+              {render_task_breakdown_table(row.get("task_types", []))}
+              <div class="quality-lines">
+                <div><b>Best:</b> {html_escape(derived_quality_text(row, best=True))}</div>
+                <div><b>Worst:</b> {html_escape(derived_quality_text(row, best=False))}</div>
+              </div>
+            </div>
+            <div class="notes-panel">
+              <h3 class="detail-heading">Judgment notes</h3>
+              {render_notes_list(notes, notes_path=notes_path)}
+            </div>
+          </div>
+        </details>
+      </td>
+    </tr>"""
 
 
 def render_model_scoreboard_html(
@@ -4929,22 +6416,24 @@ def render_model_scoreboard_html(
     catalog_models: list[dict[str, Any]],
     notes_path: Path,
     notes_sections: dict[str, list[str]],
+    catalog_events: list[dict[str, Any]] | None = None,
     generated_at: str | None = None,
 ) -> str:
     catalog_by_id = catalog_models_by_id(catalog_models)
     ordered = order_model_scoreboard_rows(rows, catalog_by_id)
-    generated = generated_at or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    cards = "".join(
-        render_model_card(
+    generated = generated_at or datetime.now().astimezone().replace(microsecond=0).isoformat()
+    table_rows = "".join(
+        render_model_table_pair(
             row,
             rank=index,
             catalog_model=catalog_by_id.get(str(row.get("model") or "")),
             notes_sections=notes_sections,
+            notes_path=notes_path,
         )
         for index, row in enumerate(ordered, start=1)
     )
-    if not cards:
-        cards = '<p class="empty-note">No local model evidence matched these filters.</p>'
+    if not table_rows:
+        table_rows = '<tr><td colspan="10" class="muted">No local model evidence matched these filters.</td></tr>'
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -4956,26 +6445,41 @@ def render_model_scoreboard_html(
 </head>
 <body>
 <div class="page scoreboard-page">
-  <header class="corner">
-    <span class="live-dot pass" aria-hidden="true"></span>
-    <span class="eyebrow">Ringer &nbsp;·&nbsp; <b>model-scoreboard</b></span>
-    <span class="clock mono">Generated {html_escape(generated)}</span>
+  <header class="scoreboard-header">
+    <h1 class="scoreboard-title">Model performance scoreboard</h1>
+    <div class="scoreboard-meta">
+      <span>Generated {html_escape(humanized_log_date(generated))}</span>
+      <nav class="source-links" aria-label="scoreboard source files">
+        {source_file_link(log_path, "eval log")}
+        {source_file_link(catalog_path, "catalog")}
+        {source_file_link(notes_path, "model notes")}
+      </nav>
+    </div>
   </header>
-  <h1 class="briefing scoreboard-briefing">Model performance scoreboard</h1>
-  <section class="source-grid" aria-label="scoreboard sources">
-    <div class="source-box"><b>Log</b><span class="mono">{html_escape(str(log_path))}</span></div>
-    <div class="source-box"><b>Catalog</b><span class="mono">{html_escape(str(catalog_path))}</span></div>
-    <div class="source-box"><b>Notes</b><span class="mono">{html_escape(str(notes_path))}</span></div>
-    <div class="source-box"><b>Rows</b><span>{fmt_int(rows_read)} read · {fmt_int(skipped)} skipped · {fmt_int(len(ordered))} models</span></div>
-  </section>
-  {render_free_watchlist(catalog_models, catalog_path)}
-  <section class="models" aria-labelledby="models-heading">
-    <h2 id="models-heading">Ranked models</h2>
-    {cards}
-  </section>
-  <footer>
-    <span>Ranking sorts by evidence tier first: proven n>=3, then probation; ties use first-try pass rate, pass rate, then lower estimated cost.</span>
-    <span>Cost estimate assumes logged worker_tokens are split 50/50 between prompt and completion tokens, using the catalog $/M in/out blend.</span>
+  {render_free_watchlist(catalog_models, catalog_path, events=catalog_events)}
+  <main>
+    <div class="table-scroll">
+      <table class="ranked-table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Model</th>
+            <th>Harness</th>
+            <th>API/Plan</th>
+            <th>Tier</th>
+            <th class="num">Tasks</th>
+            <th class="num">First-try</th>
+            <th class="num">Pass</th>
+            <th class="num">Est. $/task</th>
+            <th>Last used</th>
+          </tr>
+        </thead>
+        <tbody>{table_rows}</tbody>
+      </table>
+    </div>
+  </main>
+  <footer class="scoreboard-footer">
+    <span>{fmt_int(rows_read)} rows read, {fmt_int(skipped)} skipped lines. Ranking sorts by evidence tier first: proven n&gt;=3, then probation; ties use first-try pass rate, pass rate, then lower estimated cost. Cost estimate assumes logged worker_tokens are split 50/50 between prompt and completion tokens, using the catalog $/M in/out blend.</span>
   </footer>
 </div>
 </body>
@@ -4995,6 +6499,7 @@ def write_model_scoreboard_html(
     catalog_models: list[dict[str, Any]],
     notes_path: Path,
     notes_sections: dict[str, list[str]],
+    catalog_events: list[dict[str, Any]] | None = None,
 ) -> Path:
     target = path
     if target is None:
@@ -5007,6 +6512,7 @@ def write_model_scoreboard_html(
         skipped=skipped,
         catalog_path=catalog_path,
         catalog_models=catalog_models,
+        catalog_events=catalog_events,
         notes_path=notes_path,
         notes_sections=notes_sections,
     )
@@ -5025,17 +6531,21 @@ def write_model_scoreboard_html(
 def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list[dict[str, Any]]) -> None:
     print(f"Model log: {path} ({rows_read} rows, {skipped} skipped lines)")
     header = (
-        f"{'task_type':<18} {'model':<32} {'tasks':>5} {'attempts':>8} "
-        f"{'passed':>6} {'failed':>6} {'pass':>6} {'first':>6} "
-        f"{'dur_ms':>8} {'tokens':>8} {'last_seen'}"
+        f"{'task_type':<18} {'model':<32} {'harness':<16} {'tasks':>5} "
+        f"{'attempts':>8} {'passed':>6} {'failed':>6} {'pass':>6} "
+        f"{'first':>6} {'dur_ms':>8} {'tokens':>8} {'last_seen'}"
     )
     print(header)
     print("-" * len(header))
     for group in groups:
         duration = "" if group["median_duration_ms"] is None else str(group["median_duration_ms"])
         tokens = "" if group["median_tokens"] is None else str(group["median_tokens"])
+        display = str(group.get("model_display") or group["model"])
+        if display != group["model"]:
+            display = f"{display} ({group['model']})"
         print(
-            f"{group['task_type']:<18} {shorten(group['model'], 32):<32} "
+            f"{group['task_type']:<18} {shorten(display, 32):<32} "
+            f"{shorten(str(group.get('harness') or 'unknown'), 16):<16} "
             f"{group['tasks']:>5} {group['attempts']:>8} {group['passed']:>6} "
             f"{group['failed']:>6} {group['pass_rate']:>6.2f} "
             f"{group['first_try_pass_rate']:>6.2f} {duration:>8} "
@@ -5044,14 +6554,115 @@ def print_model_log_table(path: Path, rows_read: int, skipped: int, groups: list
     print("Judgment layer: docs/MODEL-NOTES.md")
 
 
+def build_models_api_payload(
+    *,
+    log_path: Path,
+    default_log_path: Path | None = None,
+    db_path: Path | None = None,
+    catalog_path: Path | None = None,
+    registry_path: Path | None = None,
+) -> dict[str, Any]:
+    log_path = log_path.expanduser().resolve()
+    default_log_path = (default_log_path or log_path).expanduser().resolve()
+    explicit_db = db_path is not None
+    resolved_db_path = (db_path or default_read_model_db_path()).expanduser().resolve()
+    catalog_path = (catalog_path or default_catalog_path()).expanduser().resolve()
+    registry_path = (registry_path or default_model_registry_path()).expanduser().resolve()
+    using_db = should_use_read_model_db(
+        log_path=log_path,
+        default_log_path=default_log_path,
+        explicit_db=explicit_db,
+    )
+    catalog_models: list[dict[str, Any]] = []
+    if using_db:
+        try:
+            sync_read_model_db(
+                resolved_db_path,
+                log_path,
+                catalog_path=catalog_path,
+                registry_path=registry_path,
+            )
+            rows, identity_registry = db_attempt_rows(resolved_db_path)
+            catalog_models = db_catalog_models(resolved_db_path)
+        except Exception:
+            using_db = False
+            rows, _skipped = read_model_log_rows(log_path)
+            identity_registry = load_model_identity_registry(registry_path)
+    else:
+        rows, _skipped = read_model_log_rows(log_path)
+        identity_registry = load_model_identity_registry(registry_path)
+    if not using_db:
+        with contextlib.suppress(Exception):
+            catalog_models = load_catalog_snapshot(catalog_path)
+    groups = enrich_model_groups_with_identity(
+        aggregate_model_log_rows(rows),
+        rows,
+        identity_registry,
+        include_task_type=True,
+    )
+    rollup = enrich_model_groups_with_identity(
+        aggregate_model_scoreboard_rows(rows),
+        rows,
+        identity_registry,
+        include_task_type=False,
+    )
+    catalog_by_id = catalog_models_by_id(catalog_models)
+    ordered_rollup: list[dict[str, Any]] = []
+    for row in order_model_scoreboard_rows(rollup, catalog_by_id):
+        item = dict(row)
+        item.setdefault("task_type", "(all)")
+        ordered_rollup.append(item)
+    return {
+        "generated_at": utc_now_iso(),
+        "groups": groups,
+        "rollup": ordered_rollup,
+    }
+
+
 def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
-    log_path = (args.log or config.eval.jsonl_path).expanduser().resolve()
+    default_log_path = config.eval.jsonl_path.expanduser().resolve()
+    log_path = (args.log or default_log_path).expanduser().resolve()
     since = validate_since_date(args.since)
-    rows, skipped = read_model_log_rows(log_path, since=since, engine=args.engine)
-    groups = aggregate_model_log_rows(rows, task_type=args.task_type, model=args.model)
+    explicit_db = getattr(args, "db", None) is not None
+    db_path = (getattr(args, "db", None) or default_read_model_db_path()).expanduser().resolve()
+    catalog_path = (getattr(args, "catalog_file", None) or default_catalog_path()).expanduser().resolve()
+    registry_path = (getattr(args, "registry", None) or default_model_registry_path()).expanduser().resolve()
+    using_db = should_use_read_model_db(
+        log_path=log_path,
+        default_log_path=default_log_path,
+        explicit_db=explicit_db,
+    )
+    catalog_events: list[dict[str, Any]] | None = None
+    if using_db:
+        try:
+            sync_result = sync_read_model_db(
+                db_path,
+                log_path,
+                catalog_path=catalog_path,
+                registry_path=registry_path,
+            )
+            rows, identity_registry = db_attempt_rows(db_path, since=since, engine=args.engine)
+            skipped = sync_result.skipped
+            catalog_models_from_db = db_catalog_models(db_path)
+            catalog_events = db_catalog_events(db_path, limit=6)
+        except Exception as exc:
+            using_db = False
+            print(f"models: SQLite read model unavailable; using JSONL fallback ({exc})", file=sys.stderr)
+            rows, skipped = read_model_log_rows(log_path, since=since, engine=args.engine)
+            identity_registry = load_model_identity_registry(registry_path)
+            catalog_models_from_db = []
+    else:
+        rows, skipped = read_model_log_rows(log_path, since=since, engine=args.engine)
+        identity_registry = load_model_identity_registry(registry_path)
+        catalog_models_from_db = []
+    groups = enrich_model_groups_with_identity(
+        aggregate_model_log_rows(rows, task_type=args.task_type, model=args.model),
+        rows,
+        identity_registry,
+        include_task_type=True,
+    )
     if args.explore:
-        catalog_path = (args.catalog_file or default_catalog_path()).expanduser().resolve()
-        catalog_models = load_catalog_snapshot(catalog_path)
+        catalog_models = catalog_models_from_db if using_db else load_catalog_snapshot(catalog_path)
         print_model_explore(
             log_path=log_path,
             rows_read=len(rows),
@@ -5064,10 +6675,14 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
     html_arg = getattr(args, "html", None)
     open_requested = bool(getattr(args, "open", False))
     if html_arg is not None or open_requested:
-        catalog_path = (args.catalog_file or default_catalog_path()).expanduser().resolve()
-        catalog_models = load_catalog_snapshot(catalog_path)
+        catalog_models = catalog_models_from_db if using_db else load_catalog_snapshot(catalog_path)
         notes_path = (getattr(args, "notes_file", None) or default_model_notes_path()).expanduser().resolve()
-        scoreboard_rows = aggregate_model_scoreboard_rows(rows, task_type=args.task_type, model=args.model)
+        scoreboard_rows = enrich_model_groups_with_identity(
+            aggregate_model_scoreboard_rows(rows, task_type=args.task_type, model=args.model),
+            rows,
+            identity_registry,
+            include_task_type=False,
+        )
         explicit_path = None
         if html_arg not in {None, ""}:
             explicit_path = Path(str(html_arg))
@@ -5082,6 +6697,7 @@ def run_models_command(config: AppConfig, args: argparse.Namespace) -> int:
             catalog_models=catalog_models,
             notes_path=notes_path,
             notes_sections=parse_model_notes_sections(notes_path),
+            catalog_events=catalog_events,
         )
         print(page_path)
         if open_requested:
@@ -6493,6 +8109,8 @@ def run_persistent_hud(config: AppConfig, *, port: int | None, open_viewer: bool
         preferred_port=chosen_port,
         open_viewer=open_viewer,
     )
+    server.model_log_path = config.eval.jsonl_path
+    server.default_model_log_path = config.eval.jsonl_path
     server.start()
     try:
         while True:
@@ -6540,9 +8158,20 @@ def build_parser() -> argparse.ArgumentParser:
     hud_parser.add_argument("--port", type=int, help=f"port to bind on 127.0.0.1 (default: {DEFAULT_HUD_PORT})")
     hud_parser.add_argument("--no-open", action="store_true", help="start the server without opening a browser")
 
+    db_parser = subparsers.add_parser("db", help="manage the derived SQLite read model")
+    db_parser.add_argument("--config", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
+    db_subparsers = db_parser.add_subparsers(dest="db_command", required=True)
+    for name in ("rebuild", "sync"):
+        sub = db_subparsers.add_parser(name, help=f"{name} the derived SQLite read model")
+        sub.add_argument("--db", type=Path, help="path to SQLite read model (default: ~/.ringer/ringer.db)")
+        sub.add_argument("--log", type=Path, help="path to local eval JSONL log")
+        sub.add_argument("--catalog-file", type=Path, help="path to local OpenRouter catalog snapshot")
+        sub.add_argument("--registry", type=Path, help="path to model identity registry")
+
     models_parser = subparsers.add_parser("models", help="show the local per-model performance scoreboard")
     models_parser.add_argument("--config", type=Path, default=argparse.SUPPRESS, help=argparse.SUPPRESS)
     models_parser.add_argument("--log", type=Path, help="path to local eval JSONL log")
+    models_parser.add_argument("--db", type=Path, help="path to SQLite read model (default: ~/.ringer/ringer.db)")
     models_parser.add_argument("--task-type", help="only include one task_type bucket")
     models_parser.add_argument("--model", help="only include one resolved model bucket")
     models_parser.add_argument("--engine", help="only include rows from one worker engine")
@@ -6550,6 +8179,7 @@ def build_parser() -> argparse.ArgumentParser:
     models_parser.add_argument("--explore", action="store_true", help="show proven/probation tiers plus cheap untested catalog candidates")
     models_parser.add_argument("--catalog-file", type=Path, help="path to local OpenRouter catalog snapshot")
     models_parser.add_argument("--notes-file", type=Path, default=default_model_notes_path(), help="path to MODEL-NOTES.md judgment layer")
+    models_parser.add_argument("--registry", type=Path, default=default_model_registry_path(), help=argparse.SUPPRESS)
     models_parser.add_argument("--html", nargs="?", const="", help="render a self-contained HTML scoreboard; optional output path")
     models_parser.add_argument("--open", action="store_true", help="render the HTML scoreboard to the artifact library and open it")
     models_parser.add_argument("--json", action="store_true", help="print the scoreboard as JSON")
@@ -6608,6 +8238,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_catalog_command(args)
 
         config = AppConfig.load(args.config)
+        if args.command == "db":
+            return run_db_command(config, args)
         if args.command == "models":
             return run_models_command(config, args)
         if args.command == "hud":

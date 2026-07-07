@@ -1,0 +1,142 @@
+[model]
+key = "moonshotai/kimi-k2.7-code"
+display = "Kimi K2.7 Code"
+vendor = "Moonshot AI"
+release_date = "2026-06-12"
+
+[api]
+endpoint_families = ["chat-completions", "responses", "native-vendor"]
+auth = "In this repo, access is via OpenRouter API key through the OpenAI-compatible OpenRouter base URL. Generally, OpenRouter uses Bearer OPENROUTER_API_KEY; native Moonshot/Kimi uses Bearer MOONSHOT_API_KEY at https://api.moonshot.cn/v1."
+streaming = "OpenRouter Chat Completions supports stream=true using SSE and may include comment payloads to ignore; OpenRouter Responses API Beta also streams SSE events. Native Kimi Chat Completions supports stream=true and ends with data: [DONE]; if the stream disconnects, Kimi warns the final usage chunk may not arrive."
+
+[caching]
+supported = true
+mode = "implicit"
+how_enabled = "OpenRouter docs say Moonshot AI prompt caching is automatic with no additional configuration; native Kimi exposes prompt_cache_key to improve cache hit rate for session/task affinity, especially Coding Agent sessions. OpenRouter endpoint metadata for this model currently lists input_cache_read prices but supports_implicit_caching=false on fetched endpoints, so harnesses should inspect cached_tokens/prompt_tokens_details and avoid assuming explicit cache_control is accepted for Kimi."
+ttl = "unknown"
+read_pricing_per_m = "$0.15 per 1M input tokens on the lowest-priced OpenRouter endpoint; native Kimi list price is ¥1.30 per 1M cache-hit input tokens"
+write_pricing_per_m = "$0.74 per 1M prompt tokens on the lowest-priced OpenRouter endpoint; OpenRouter docs say Moonshot cache writes have no separate cache-write surcharge; native Kimi cache-miss input is ¥6.50 per 1M"
+min_cacheable_prefix_tokens = "unknown"
+
+[tool_calling]
+format = "OpenAI-compatible tools/tool_choice/tool_calls. OpenRouter Chat Completions accepts tools and tool_choice and normalizes tool_calls; native Kimi Chat Completions also returns tool_calls with function.name and function.arguments. OpenRouter Responses API Beta uses OpenAI Responses-style tools."
+parallel = true
+strict_json_schema = true
+quirks = [
+  "OpenRouter require_parameters=true should be used when a harness depends on tools, response_format, structured_outputs, or parallel_tool_calls; otherwise providers that do not support a parameter may receive the request and ignore it.",
+  "Only some OpenRouter upstream endpoints for this model list parallel_tool_calls; require_parameters=true is needed if parallel tool calls are required.",
+  "Native Kimi K2.7 Code only accepts tool_choice auto or none; forcing a specific tool conflicts with thinking content and errors.",
+  "Native Kimi K2.7 Code requires preserving assistant reasoning_content during multi-step tool calls; dropping it can error.",
+  "No Kimi K2.7-specific documented long-context malformed-tool-JSON failure was found in fetched official docs; OpenRouter's structured-output docs still recommend response healing to reduce invalid JSON risk when models return imperfect formatting."
+]
+
+[reasoning]
+params = ["reasoning", "include_reasoning", "reasoning_effort", "thinking.type", "thinking.keep"]
+defaults = "OpenRouter model metadata marks reasoning mandatory and default_enabled=true. Native Kimi K2.7 Code defaults to thinking={type=\"enabled\", keep=\"all\"}; type only accepts enabled and keep only accepts all/null, so thinking cannot be disabled and preserved thinking is always on."
+max_output_interaction = "Reasoning tokens are output tokens and charged accordingly on OpenRouter. Native Kimi reasoning_content must be preserved in multi-turn/tool contexts and counts toward token usage; max reasoning budget is not separately documented for Kimi K2.7 Code."
+
+[limits]
+context_window = 262144
+max_output_tokens = 16384
+rate_limits = "OpenRouter model endpoint metadata shows top_provider max_completion_tokens=16384, while upstream endpoints vary from 16384 to 262144 or null; native Kimi K2.7 Code docs list 256K context and a default max_tokens of 32768 for K2.7/K2.6/K2.5 family behavior. OpenRouter account/model rate limits apply and can be checked with GET /api/v1/key."
+
+[openrouter]
+upstream_providers = ["DeepInfra", "Inceptron", "Parasail", "Venice", "Ambient", "Novita", "SiliconFlow", "Moonshot AI", "Cloudflare", "AtlasCloud", "Together"]
+require_parameters_behavior = "provider.require_parameters=false by default, so unsupported request parameters can be ignored by the chosen provider. Set require_parameters=true to route only to providers that support all request parameters; if none qualify, the request should not be routed to an incompatible provider."
+
+[pricing]
+prompt_per_m = "$0.74"
+completion_per_m = "$3.50"
+cache_read_per_m = "$0.15"
+cache_write_per_m = "$0 extra cache-write surcharge; uncached prompt tokens billed at prompt_per_m"
+as_of = "2026-07-06"
+
+[[sources]]
+claim = "model: OpenRouter release date, context, and list price"
+url = "https://openrouter.ai/moonshotai/kimi-k2.7-code"
+accessed = "2026-07-06"
+quote = "In / Out Price $0.74 / $3.50 per 1M Context 262K Released Jun 12, 2026"
+
+[[sources]]
+claim = "api: OpenRouter OpenAI-compatible Chat Completions and streaming"
+url = "https://openrouter.ai/docs/api/reference/overview"
+accessed = "2026-07-06"
+quote = "OpenRouter's request and response schemas are very similar to the OpenAI Chat API"
+
+[[sources]]
+claim = "api: Kimi native OpenAI-compatible access and API key"
+url = "https://platform.kimi.com/docs/guide/start-using-kimi-api"
+accessed = "2026-07-06"
+quote = "Kimi API 提供了与 Kimi 大模型交互的能力，并兼容 OpenAI API 格式"
+
+[[sources]]
+claim = "caching: OpenRouter Moonshot caching is automatic"
+url = "https://openrouter.ai/docs/guides/best-practices/prompt-caching"
+accessed = "2026-07-06"
+quote = "Prompt caching with Moonshot AI is automated and does not require any additional configuration."
+
+[[sources]]
+claim = "caching: Kimi native prompt_cache_key for coding-agent sessions"
+url = "https://platform.kimi.com/docs/api/chat"
+accessed = "2026-07-06"
+quote = "用于缓存相似请求的响应以优化缓存命中率。对于 Coding Agent，通常是代表单个会话的 session id 或 task id"
+
+[[sources]]
+claim = "tool_calling: OpenRouter standardizes tool calling"
+url = "https://openrouter.ai/docs/guides/features/tool-calling"
+accessed = "2026-07-06"
+quote = "OpenRouter standardizes the tool calling interface across models and providers"
+
+[[sources]]
+claim = "tool_calling: Kimi strict tool schemas and max 128 tools"
+url = "https://platform.kimi.com/docs/api/tool-use"
+accessed = "2026-07-06"
+quote = "每个 function 支持 `strict` 参数（boolean 类型，可选）"
+
+[[sources]]
+claim = "tool_calling: Kimi K2.7 tool_choice and reasoning_content constraints"
+url = "https://platform.kimi.com/docs/guide/kimi-k2-7-code-quickstart"
+accessed = "2026-07-06"
+quote = "tool_choice 只能使用”auto”和”none”（默认值为”auto”）"
+
+[[sources]]
+claim = "reasoning: OpenRouter reasoning parameter names and defaults"
+url = "https://openrouter.ai/docs/guides/best-practices/reasoning-tokens"
+accessed = "2026-07-06"
+quote = "You can control reasoning tokens in your requests using the `reasoning` parameter"
+
+[[sources]]
+claim = "reasoning: Kimi K2.7 thinking is mandatory and preserved"
+url = "https://platform.kimi.com/docs/api/chat"
+accessed = "2026-07-06"
+quote = "该模型始终开启思考"
+
+[[sources]]
+claim = "limits: OpenRouter model endpoint context and output limit metadata"
+url = "https://openrouter.ai/api/v1/models/moonshotai/kimi-k2.7-code/endpoints"
+accessed = "2026-07-06"
+quote = "\"context_length\":262144"
+
+[[sources]]
+claim = "limits: native Kimi K2.7 256K context"
+url = "https://platform.kimi.com/docs/guide/kimi-k2-7-code-quickstart"
+accessed = "2026-07-06"
+quote = "`kimi-k2.7-code`、`kimi-k2.7-code-highspeed`、`kimi-k2.6`、`kimi-k2.5` 模型均提供 256K 上下文窗口"
+
+[[sources]]
+claim = "pricing: OpenRouter endpoint prompt, completion, and cache-read prices"
+url = "https://openrouter.ai/api/v1/models/moonshotai/kimi-k2.7-code/endpoints"
+accessed = "2026-07-06"
+quote = "\"prompt\":\"0.00000074\",\"completion\":\"0.0000035\",\"input_cache_read\":\"0.00000015\""
+
+[[sources]]
+claim = "pricing: native Kimi K2.7 cache-hit, cache-miss, output prices"
+url = "https://platform.kimi.com/docs/pricing/chat-k27-code"
+accessed = "2026-07-06"
+quote = "[\"kimi-k2.7-code\", \"1M tokens\", \"¥1.30\", \"¥6.50\", \"¥27.00\", \"262,144 tokens\"]"
+
+[[sources]]
+claim = "openrouter: endpoint provider list and parameter support metadata"
+url = "https://openrouter.ai/api/v1/models/moonshotai/kimi-k2.7-code/endpoints"
+accessed = "2026-07-06"
+quote = "\"provider_name\":\"DeepInfra\""

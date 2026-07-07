@@ -1,0 +1,94 @@
+[model]
+key = "grok-composer-2.5-fast"
+display = "Grok Composer 2.5 Fast"
+vendor = "Cursor (Anysphere), served in our setup through xAI Grok Build CLI"
+release_date = "2026-05-18"
+
+[api]
+endpoint_families = ["native-vendor"]
+auth = "In our setup, Grok Build CLI v0.2.x exposes grok-composer-2.5-fast through the grok.com OAuth/session-authenticated CLI chat proxy. xAI does not document this slug as a public xAI API model; Cursor documents Composer 2.5 as available in Cursor."
+streaming = "CLI proxy behavior is streaming-first in local Grok 0.2.x docs, but public xAI/Cursor docs do not disclose a standalone Composer 2.5 Fast streaming API contract."
+
+[caching]
+supported = false
+mode = "unknown"
+how_enabled = "Unknown for grok-composer-2.5-fast through the Grok CLI proxy. xAI documents automatic prompt caching for the xAI API generally, but xAI does not publish this Composer slug as a public API model."
+ttl = "unknown"
+read_pricing_per_m = "unknown"
+write_pricing_per_m = "unknown"
+min_cacheable_prefix_tokens = "unknown"
+
+[tool_calling]
+format = "Cursor-style agent/harness tool use through Grok Build CLI. The public API format for grok-composer-2.5-fast is not disclosed by xAI or Cursor."
+parallel = "unknown"
+strict_json_schema = "unknown"
+quirks = [
+  "Cursor says Composer 2.5 training targeted bad tool calls, including attempts to call tools that are not available.",
+  "No public xAI or Cursor document found for Composer 2.5 Fast strict JSON schema support.",
+  "No official long-context malformed-JSON failure mode was found for Composer 2.5 Fast."
+]
+
+[reasoning]
+params = []
+defaults = "Cursor describes Composer 2.5 as improved in sustained work, instruction following, effort calibration, and long-horizon coding behavior, but no public reasoning-control parameter is disclosed for grok-composer-2.5-fast; local Grok 0.2.81 catalog reports supports_reasoning_effort=false."
+max_output_interaction = "unknown"
+
+[limits]
+context_window = "unknown"
+max_output_tokens = "unknown"
+rate_limits = "CLI OAuth plan/account limits are unknown. Public Cursor/xAI docs found in this pass do not disclose API rate limits, max output tokens, or a standalone context window for grok-composer-2.5-fast."
+
+[pricing]
+prompt_per_m = "$3.00"
+completion_per_m = "$15.00"
+cache_read_per_m = "unknown"
+cache_write_per_m = "unknown"
+as_of = "2026-07-06"
+
+[[sources]]
+claim = "model: Composer 2.5 release date, lineage, and availability"
+url = "https://cursor.com/blog/composer-2-5"
+accessed = "2026-07-06"
+quote = "Composer 2.5 is now available"
+
+[[sources]]
+claim = "model: Composer 2.5 built on Moonshot Kimi K2.5 and SpaceXAI collaboration"
+url = "https://cursor.com/blog/composer-2-5"
+accessed = "2026-07-06"
+quote = "Moonshot's Kimi K2.5"
+
+[[sources]]
+claim = "api: Grok Build CLI browser auth and API-key fallback"
+url = "https://docs.x.ai/build/overview"
+accessed = "2026-07-06"
+quote = "opens a browser for authentication"
+
+[[sources]]
+claim = "caching: xAI API caching exists generally, but Composer CLI support is undisclosed"
+url = "https://docs.x.ai/developers/advanced-api-usage/prompt-caching"
+accessed = "2026-07-06"
+quote = "automatically caches"
+
+[[sources]]
+claim = "tool_calling: Composer 2.5 training targets unavailable-tool mistakes"
+url = "https://cursor.com/blog/composer-2-5"
+accessed = "2026-07-06"
+quote = "Tool not found"
+
+[[sources]]
+claim = "reasoning: Composer 2.5 effort calibration but no public reasoning parameter"
+url = "https://cursor.com/blog/composer-2-5"
+accessed = "2026-07-06"
+quote = "effort calibration"
+
+[[sources]]
+claim = "limits: long-horizon context behavior but exact public limit undisclosed"
+url = "https://cursor.com/blog/composer-2-5"
+accessed = "2026-07-06"
+quote = "hundreds of thousands"
+
+[[sources]]
+claim = "pricing: Composer 2.5 Fast token prices"
+url = "https://cursor.com/blog/composer-2-5"
+accessed = "2026-07-06"
+quote = "$3.00/M input and $15.00/M output"

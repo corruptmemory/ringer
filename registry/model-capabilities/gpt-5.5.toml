@@ -1,0 +1,147 @@
+[model]
+key = "gpt-5.5"
+display = "GPT-5.5"
+vendor = "OpenAI"
+release_date = "2026-04-23"
+identity_verification = "OpenAI's Codex model docs list gpt-5.5 as a recommended Codex CLI/SDK model, and the OpenAI model page lists GPT-5.5 as the default model with alias gpt-5.5 and snapshot gpt-5.5-2026-04-23. Jon's assumption that the current Codex CLI OAuth-plan default model key is gpt-5.5 is consistent with the fetched official docs and the local ringer identity registry."
+
+[api]
+endpoint_families = ["responses", "chat-completions", "batch"]
+auth = "In this setup, Codex CLI signs in with ChatGPT/OAuth plan credentials and uses ChatGPT workspace permissions, plan access, and ChatGPT-managed Codex entitlements. Codex CLI can also sign in with an OpenAI API key; API-key usage is billed through the OpenAI Platform account at standard API rates instead of included ChatGPT plan credits."
+streaming = "Supported. The model page lists Streaming as supported. API streaming is available with stream=true on Responses and Chat Completions; streaming responses use server-sent events. Codex provider config exposes SSE idle timeout/retry settings and a Responses WebSocket support flag for providers that support it."
+
+[caching]
+supported = true
+mode = "implicit"
+how_enabled = "Prompt caching works automatically for eligible requests with no code changes. For GPT-5.5, prompt_cache_retention only supports 24h. Caching starts at 1024 prompt tokens; repeated prompt prefixes, tools, and structured-output schemas can contribute to the cached prefix."
+ttl = "For GPT-5.5, only 24h prompt_cache_retention is supported. Extended prompt cache key/value tensors have a maximum retention period of 24 hours; ZDR extended-cache tensors are retained for 1-2 hours for most usage and at most 24 hours."
+read_pricing_per_m = 0.50
+write_pricing_per_m = 5.00
+min_cacheable_prefix_tokens = 1024
+
+[tool_calling]
+format = "OpenAI Responses API tools and function calls with JSON Schema tool parameters. Chat Completions function calling is also supported by the model. Structured Outputs are supported, including strict JSON Schema mode with strict=true."
+parallel = true
+strict_json_schema = true
+quirks = [
+  "For reasoning models using function calling through the Responses API, pass back reasoning items, function call items, and function call output items during tool loops.",
+  "Prompt-only JSON mode can still produce incomplete JSON when output is cut off by max_output_tokens or a content filter; use Structured Outputs for schema adherence.",
+  "No GPT-5.5-specific official long-context malformed-JSON failure note was found; treat long-context JSON reliability as a harness risk and prefer strict schemas.",
+]
+
+[reasoning]
+params = ["reasoning.effort", "text.verbosity", "max_output_tokens", "model_reasoning_effort", "model_reasoning_summary", "model_verbosity"]
+defaults = "GPT-5.5 reasoning.effort supports none, low, medium, high, and xhigh; medium is the default. Codex config exposes model_reasoning_effort, model_reasoning_summary, and model_verbosity; when unset, Codex/model defaults apply."
+max_output_interaction = "max_output_tokens limits total generated tokens, including reasoning tokens, visible output tokens, and non-visible formatting tokens. If the cap is exhausted during reasoning, the response can be incomplete before any visible output is produced."
+
+[limits]
+context_window = 1050000
+max_output_tokens = 128000
+rate_limits = "Model page long-context API tiers: Free not supported; Tier 1 500 RPM / 500,000 TPM / 1,500,000 batch queue; Tier 2 5,000 RPM / 1,000,000 TPM / 3,000,000 batch queue; Tier 3 5,000 RPM / 2,000,000 TPM / 100,000,000 batch queue; Tier 4 10,000 RPM / 4,000,000 TPM / 200,000,000 batch queue; Tier 5 15,000 RPM / 40,000,000 TPM / 15,000,000,000 batch queue. ChatGPT-plan Codex OAuth usage is governed by plan entitlements, not API billing tiers."
+
+[openrouter]
+upstream_providers = []
+require_parameters_behavior = "not applicable; this registry entry is for OpenAI direct/Codex OAuth access, not an OpenRouter-served model"
+
+[pricing]
+prompt_per_m = 5.00
+completion_per_m = 30.00
+cache_read_per_m = 0.50
+cache_write_per_m = 5.00
+as_of = "2026-07-06"
+
+[[sources]]
+claim = "model: Codex docs identify gpt-5.5 as the Codex CLI model"
+url = "https://developers.openai.com/codex/models"
+accessed = "2026-07-06"
+quote = "codex -m gpt-5.5"
+
+[[sources]]
+claim = "model: OpenAI model page lists GPT-5.5 default alias and snapshot date"
+url = "https://developers.openai.com/api/docs/models/gpt-5.5"
+accessed = "2026-07-06"
+quote = "gpt-5.5-2026-04-23"
+
+[[sources]]
+claim = "api: GPT-5.5 supports Responses, Chat Completions, and Batch endpoints"
+url = "https://developers.openai.com/api/docs/models/gpt-5.5"
+accessed = "2026-07-06"
+quote = "v1/chat/completions"
+
+[[sources]]
+claim = "api: Codex CLI ChatGPT OAuth and API-key auth behavior"
+url = "https://developers.openai.com/codex/auth"
+accessed = "2026-07-06"
+quote = "Sign in with ChatGPT for subscription access"
+
+[[sources]]
+claim = "api: streaming uses stream true and SSE"
+url = "https://developers.openai.com/api/docs/guides/streaming-responses"
+accessed = "2026-07-06"
+quote = "text/event-stream"
+
+[[sources]]
+claim = "caching: automatic prompt caching and 1024-token minimum"
+url = "https://developers.openai.com/api/docs/guides/prompt-caching"
+accessed = "2026-07-06"
+quote = "Caching is enabled automatically for prompts that are 1024 tokens or longer."
+
+[[sources]]
+claim = "caching: GPT-5.5 only supports 24h prompt cache retention"
+url = "https://developers.openai.com/api/docs/guides/prompt-caching"
+accessed = "2026-07-06"
+quote = "For `gpt-5.5`, `gpt-5.5-pro`, and future models, only `24h` is supported."
+
+[[sources]]
+claim = "tool_calling: GPT-5.5 supports function calling and structured outputs"
+url = "https://developers.openai.com/api/docs/models/gpt-5.5"
+accessed = "2026-07-06"
+quote = "Function calling Supported Structured outputs Supported"
+
+[[sources]]
+claim = "tool_calling: strict structured outputs use JSON Schema strict true"
+url = "https://developers.openai.com/api/docs/guides/structured-outputs"
+accessed = "2026-07-06"
+quote = "strict: true"
+
+[[sources]]
+claim = "tool_calling: Responses API includes parallel tool call behavior"
+url = "https://developers.openai.com/api/reference/resources/responses/methods/create"
+accessed = "2026-07-06"
+quote = "\"parallel_tool_calls\": true"
+
+[[sources]]
+claim = "reasoning: GPT-5.5 reasoning effort names and default"
+url = "https://developers.openai.com/api/docs/models/gpt-5.5"
+accessed = "2026-07-06"
+quote = "Reasoning.effort supports: none, low, medium (default), high and xhigh."
+
+[[sources]]
+claim = "reasoning: max_output_tokens includes reasoning and visible output"
+url = "https://developers.openai.com/api/docs/guides/reasoning"
+accessed = "2026-07-06"
+quote = "including reasoning tokens, visible output tokens, and non-visible formatting tokens"
+
+[[sources]]
+claim = "reasoning: Codex config exposes model reasoning and verbosity controls"
+url = "https://developers.openai.com/codex/config-reference"
+accessed = "2026-07-06"
+quote = "model_reasoning_effort"
+
+[[sources]]
+claim = "limits: GPT-5.5 context window and max output tokens"
+url = "https://developers.openai.com/api/docs/models/gpt-5.5"
+accessed = "2026-07-06"
+quote = "1,050,000 context window"
+
+[[sources]]
+claim = "limits: GPT-5.5 long-context rate limit tiers"
+url = "https://developers.openai.com/api/docs/models/gpt-5.5"
+accessed = "2026-07-06"
+quote = "Tier 5 15,000 40,000,000 15,000,000,000"
+
+[[sources]]
+claim = "pricing: GPT-5.5 standard token prices and cached input price"
+url = "https://developers.openai.com/api/docs/models/gpt-5.5"
+accessed = "2026-07-06"
+quote = "$5.00 Cached input $0.50 Output $30.00"

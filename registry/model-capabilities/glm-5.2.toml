@@ -1,0 +1,194 @@
+[model]
+key = "openrouter/z-ai/glm-5.2"
+display = "GLM 5.2"
+vendor = "Z.ai"
+release_date = "2026-06-16"
+
+[api]
+endpoint_families = ["chat-completions", "native-vendor"]
+auth = "OpenCode uses OpenRouter API-key auth with model slug z-ai/glm-5.2. Native Z.ai access uses bearer-token auth against the OpenAI-compatible Z.ai Chat Completions API."
+streaming = "OpenRouter Chat Completions supports stream=true. Native Z.ai Chat Completions supports stream=true over standard Event Stream and terminates with data: [DONE]; native function-call streaming is controlled separately by tool_stream, which defaults to false."
+
+[caching]
+supported = true
+mode = "implicit"
+how_enabled = "Native Z.ai context caching is automatic and requires no request-side cache_control. Through OpenRouter/OpenCode, do not rely on prompt caching for GLM-5.2 today: OpenRouter documents provider-specific caching and current GLM-5.2 endpoint metadata reports supports_implicit_caching=false for every upstream endpoint, even though many endpoints expose input_cache_read pricing."
+ttl = "unknown"
+read_pricing_per_m = 0.16874
+write_pricing_per_m = "unknown"
+min_cacheable_prefix_tokens = "unknown"
+
+[tool_calling]
+format = "OpenAI-compatible Chat Completions tools array with function definitions and tool_choice; tool calls return assistant tool_calls with function.arguments as a JSON string. Native Z.ai documents tool_choice auto only. OpenRouter exposes tools, tool_choice, response_format, structured_outputs, and parallel_tool_calls at the model level, but support varies by upstream provider."
+parallel = true
+strict_json_schema = "unknown"
+quirks = [
+  "Use provider.require_parameters=true when a harness depends on tools, tool_choice, response_format, structured_outputs, parallel_tool_calls, reasoning, or reasoning_effort; otherwise OpenRouter may route to a provider that ignores unsupported parameters.",
+  "Current OpenRouter GLM-5.2 providers do not all expose the same tool-related parameters; only some advertise structured_outputs, and only Inceptron currently advertises parallel_tool_calls in endpoint metadata.",
+  "Native Z.ai structured output documentation describes JSON mode plus client-side JSON Schema validation examples, not a confirmed strict server-side schema guarantee for tool arguments.",
+  "Local OpenCode/Ringer observation from long structured tasks: GLM-5.2 can occasionally emit malformed or retry-needed tool JSON under long context; keep parse validation and retry behavior enabled instead of treating the first malformed tool call as a model-failure verdict."
+]
+
+[reasoning]
+params = ["reasoning", "include_reasoning", "reasoning_effort", "thinking", "thinking.type", "thinking.clear_thinking"]
+defaults = "OpenRouter reports reasoning default_enabled=true, default_effort=high, and supported_efforts=[\"xhigh\", \"high\"]. Native Z.ai enables thinking by default; native reasoning_effort defaults to max, maps low/medium to high, xhigh to max, and none/minimal to skipping thinking."
+max_output_interaction = "OpenRouter reasoning tokens are returned in message.reasoning unless excluded and are charged as output tokens. Native Z.ai max_tokens has a 131072 maximum for GLM-5.2, so visible output plus returned reasoning content must fit the generation budget used by the harness."
+
+[limits]
+context_window = 1048576
+max_output_tokens = 131072
+rate_limits = "unknown"
+
+[openrouter]
+upstream_providers = [
+  "Novita (novita/fp8)",
+  "StreamLake (streamlake/fp8)",
+  "DeepInfra (deepinfra/fp4)",
+  "DekaLLM (dekallm)",
+  "GMICloud (gmicloud/fp8)",
+  "DigitalOcean (digitalocean)",
+  "Morph (morph)",
+  "Baidu (baidu/fp8)",
+  "Io Net (io-net/fp8)",
+  "Wafer (wafer/fp4)",
+  "Decart (decart/fp4)",
+  "AkashML (akashml/fp8)",
+  "SiliconFlow (siliconflow/fp8)",
+  "Alibaba (alibaba)",
+  "AtlasCloud (atlas-cloud/fp8)",
+  "Inceptron (inceptron/fp4)",
+  "WandB (wandb/fp4)",
+  "Z.AI (z-ai/fp8)",
+  "Fireworks (fireworks)",
+  "Cloudflare (cloudflare)",
+  "Friendli (friendli)",
+  "Parasail (parasail/fp4)",
+  "Venice (venice/fp8)",
+  "Together (together)",
+  "Ambient (ambient/fp8)",
+  "Phala (phala)",
+  "Fireworks (fireworks/fast)",
+  "Wafer (wafer/fast)"
+]
+require_parameters_behavior = "Set provider.require_parameters=true when a harness depends on a parameter such as tools, tool_choice, response_format, structured_outputs, parallel_tool_calls, reasoning, or reasoning_effort. With the default false setting, OpenRouter says providers that do not support all request parameters can still receive the request and ignore unknown parameters."
+
+[pricing]
+prompt_per_m = 0.9086
+completion_per_m = 2.8556
+cache_read_per_m = 0.16874
+cache_write_per_m = "unknown"
+as_of = "2026-07-06"
+
+[[sources]]
+claim = "model: OpenRouter slug and release-date basis"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-07-06"
+quote = "\"id\":\"z-ai/glm-5.2\",\"canonical_slug\":\"z-ai/glm-5.2-20260616\""
+
+[[sources]]
+claim = "api: native Z.ai chat completions and streaming"
+url = "https://docs.z.ai/api-reference/llm/chat-completion.md"
+accessed = "2026-07-06"
+quote = "supports both streaming and non-streaming output modes"
+
+[[sources]]
+claim = "caching: native Z.ai implicit context caching"
+url = "https://docs.z.ai/guides/capabilities/cache.md"
+accessed = "2026-07-06"
+quote = "without manual configuration"
+
+[[sources]]
+claim = "caching: OpenRouter prompt caching is provider/model specific"
+url = "https://openrouter.ai/docs/features/prompt-caching.md"
+accessed = "2026-07-06"
+quote = "enable prompt caching on supported providers and models"
+
+[[sources]]
+claim = "caching: current OpenRouter GLM-5.2 endpoint metadata"
+url = "https://openrouter.ai/api/v1/models/z-ai/glm-5.2/endpoints"
+accessed = "2026-07-06"
+quote = "\"supports_implicit_caching\":false"
+
+[[sources]]
+claim = "tool_calling: native Z.ai function calling JSON argument format"
+url = "https://docs.z.ai/guides/capabilities/function-calling.md"
+accessed = "2026-07-06"
+quote = "Function call parameters (JSON format string)"
+
+[[sources]]
+claim = "tool_calling: native Z.ai tool_choice behavior"
+url = "https://docs.z.ai/guides/capabilities/function-calling.md"
+accessed = "2026-07-06"
+quote = "default is `auto` (only supports `auto`)"
+
+[[sources]]
+claim = "tool_calling: OpenRouter require_parameters behavior"
+url = "https://openrouter.ai/docs/guides/routing/provider-selection.md"
+accessed = "2026-07-06"
+quote = "Only use providers that support all parameters in your request"
+
+[[sources]]
+claim = "tool_calling: Z.ai structured output is JSON mode"
+url = "https://docs.z.ai/guides/capabilities/struct-output.md"
+accessed = "2026-07-06"
+quote = "set to `{\"type\": \"json_object\"}` to enable JSON mode"
+
+[[sources]]
+claim = "reasoning: OpenRouter reasoning parameter and billing"
+url = "https://openrouter.ai/docs/guides/reasoning-tokens.md"
+accessed = "2026-07-06"
+quote = "Reasoning tokens are considered output tokens"
+
+[[sources]]
+claim = "reasoning: OpenRouter GLM-5.2 reasoning defaults"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-07-06"
+quote = "\"default_enabled\":true,\"supported_efforts\":[\"xhigh\",\"high\"],\"default_effort\":\"high\""
+
+[[sources]]
+claim = "reasoning: native Z.ai thinking controls"
+url = "https://docs.z.ai/api-reference/llm/chat-completion.md"
+accessed = "2026-07-06"
+quote = "default: enabled"
+
+[[sources]]
+claim = "reasoning: native Z.ai reasoning_effort mapping"
+url = "https://docs.z.ai/api-reference/llm/chat-completion.md"
+accessed = "2026-07-06"
+quote = "will be mapped to `high`;"
+
+[[sources]]
+claim = "limits: native Z.ai GLM-5.2 context and output limits"
+url = "https://docs.z.ai/guides/llm/glm-5.2.md"
+accessed = "2026-07-06"
+quote = "Context Length"
+
+[[sources]]
+claim = "limits: OpenRouter GLM-5.2 context and top-provider output limits"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-07-06"
+quote = "\"context_length\":1048576"
+
+[[sources]]
+claim = "limits: native Z.ai max_tokens maximum"
+url = "https://docs.z.ai/api-reference/llm/chat-completion.md"
+accessed = "2026-07-06"
+quote = "maximum: 131072"
+
+[[sources]]
+claim = "openrouter: current GLM-5.2 upstream endpoints"
+url = "https://openrouter.ai/api/v1/models/z-ai/glm-5.2/endpoints"
+accessed = "2026-07-06"
+quote = "\"provider_name\":\"Novita\",\"tag\":\"novita/fp8\""
+
+[[sources]]
+claim = "pricing: OpenRouter GLM-5.2 prompt, completion, and cache-read pricing"
+url = "https://openrouter.ai/api/v1/models"
+accessed = "2026-07-06"
+quote = "\"prompt\":\"0.0000009086\",\"completion\":\"0.0000028556\",\"input_cache_read\":\"0.00000016874\""
+
+[[sources]]
+claim = "pricing: native Z.ai GLM-5.2 cached input pricing"
+url = "https://docs.z.ai/guides/overview/pricing.md"
+accessed = "2026-07-06"
+quote = "| GLM-5.2             | \\$1.4  | \\$0.26"

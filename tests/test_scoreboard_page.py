@@ -206,8 +206,13 @@ class ScoreboardPageTests(unittest.TestCase):
 ## Proven lane (`openrouter/proven`)
 
 - Non-dated setup line ignored by the parser.
-- 2026-07-06 - steady code-feature performance across a larger sample.
+- 2026-07-06 — steady `code-feature` performance across a larger sample.
   Continuation line kept with the dated bullet.
+- 2026-07-05 - second newest note.
+- 2026-07-04 - third newest note.
+- 2026-07-03 - fourth newest note.
+- 2026-07-02 - fifth newest note.
+- 2026-07-01 - older note should stay behind the cap.
 
 ## codex
 
@@ -238,28 +243,84 @@ class ScoreboardPageTests(unittest.TestCase):
         self.assertEqual(str(path.resolve()) + "\n", out.getvalue())
         return path.read_text(encoding="utf-8")
 
-    def test_html_render_contains_models_tiers_counts_free_badge_and_notes(self) -> None:
+    def test_html_render_contains_ranked_table_badges_bars_costs_and_normalized_notes(self) -> None:
         html = self.render_to(self.root / "scoreboard.html")
 
+        expected_headers = [
+            "Rank",
+            "Model",
+            "Harness",
+            "API/Plan",
+            "Tier",
+            "Tasks",
+            "First-try",
+            "Pass",
+            "Est. $/task",
+            "Last used",
+        ]
+        last_index = -1
+        for header in expected_headers:
+            index = html.index(f">{header}<")
+            self.assertGreater(index, last_index)
+            last_index = index
+
+        self.assertIn('<table class="ranked-table">', html)
+        self.assertIn('<div class="table-scroll">', html)
+        self.assertNotIn("model-card", html)
+        self.assertNotIn("source-grid", html)
         self.assertIn("openrouter/proven", html)
         self.assertIn("openrouter/probation", html)
         self.assertIn("openrouter/free:free", html)
-        self.assertIn("codex", html)
-        self.assertIn("proven", html)
-        self.assertIn("probation", html)
+        self.assertIn('<div class="model-name">GPT-5.5</div><div class="model-id">codex</div>', html)
+        self.assertIn('<span class="tier-badge proven">proven</span>', html)
+        self.assertIn('<span class="tier-badge probation">probation</span>', html)
         self.assertIn("n=20", html)
-        self.assertIn("FREE", html)
+        self.assertIn('class="rate-bar bar-fill" style="width: 90%"', html)
+        self.assertIn('class="rate-bar bar-fill" style="width: 100%"', html)
+        self.assertIn(">free</td>", html)
         self.assertNotIn("$0/task", html)
-        self.assertIn("steady code-feature performance across a larger sample", html)
-        self.assertIn("Continuation line kept with the dated bullet.", html)
+        self.assertIn(">in plan</td>", html)
+        self.assertIn("<time>July 6</time><span>steady code-feature performance across a larger sample. Continuation line kept with the dated bullet.</span>", html)
+        self.assertNotIn("`code-feature`", html)
+        self.assertIn("fifth newest note", html)
+        self.assertNotIn("older note should stay behind the cap", html)
+        self.assertIn("more in model notes", html)
         self.assertIn("no judgment notes yet", html)
-        self.assertIn("included in plan", html)
+
+    def test_html_header_links_watchlist_and_footer_diagnostics(self) -> None:
+        html = self.render_to(self.root / "scoreboard.html")
+
+        self.assertIn("<h1 class=\"scoreboard-title\">Model performance scoreboard</h1>", html)
+        self.assertIn("Generated July 6, 2026", html)
+        self.assertIn('>eval log</a>', html)
+        self.assertIn('>catalog</a>', html)
+        self.assertIn('>model notes</a>', html)
+        self.assertIn(f'title="{self.log_path.resolve()}"', html)
+        self.assertIn(f'title="{self.catalog_path.resolve()}"', html)
+        self.assertIn(f'title="{self.notes_path.resolve()}"', html)
+        header_html = html[: html.index('<section class="watchlist"')]
+        self.assertNotIn("rows read", header_html)
+        self.assertNotIn("skipped", header_html)
+
+        self.assertEqual(1, html.count('class="watchlist"'))
+        self.assertIn("1 models free on OpenRouter right now", html)
+        self.assertIn('data-model="openrouter/free:free"', html)
+        self.assertIn('title="openrouter/free:free"', html)
+        self.assertIn("Free · 128K ctx", html)
+        self.assertIn("Free went free — July 6", html)
+        self.assertNotIn("went_free", html)
+
+        footer_start = html.index('<footer class="scoreboard-footer">')
+        footer_html = html[footer_start:]
+        self.assertIn("25 rows read, 1 skipped lines.", footer_html)
+        self.assertIn("Ranking sorts by evidence tier first", footer_html)
+        self.assertIn("Cost estimate assumes logged worker_tokens are split 50/50", footer_html)
 
     def test_evidence_floor_orders_probation_after_proven_model(self) -> None:
         html = self.render_to(self.root / "scoreboard.html")
 
         self.assertLess(html.index("openrouter/proven"), html.index("openrouter/probation"))
-        self.assertIn("#1", html[: html.index("openrouter/proven")])
+        self.assertIn('<td class="rank-cell num">1</td>', html[: html.index("openrouter/proven")])
 
     def test_reused_task_identity_does_not_collapse_proven_evidence(self) -> None:
         rows: list[dict[str, object]] = []
@@ -294,7 +355,9 @@ class ScoreboardPageTests(unittest.TestCase):
 
         self.assertLess(html.index("openrouter/proven"), html.index("openrouter/probation"))
         self.assertIn("n=20", html)
-        self.assertIn("proven", html[: html.index("openrouter/proven")])
+        row_start = html.index('<tr class="model-row" id="model-openrouter-proven">')
+        row_end = html.index("</tr>", row_start)
+        self.assertIn('<span class="tier-badge proven">proven</span>', html[row_start:row_end])
 
     def test_html_path_does_not_write_artifact_library(self) -> None:
         html_path = self.root / "custom.html"
@@ -333,14 +396,17 @@ class ScoreboardPageTests(unittest.TestCase):
         self.assertNotRegex(html, r"""(?:src|href)=["']https?://""")
         self.assertNotRegex(html, r"""@import\s+["']https?://""")
         self.assertNotIn("<script", html.lower())
+        self.assertIn("@media (prefers-color-scheme: light)", html)
+        self.assertIn("@media (prefers-color-scheme: dark)", html)
 
     def test_notes_section_parser_matches_heading_and_missing_section_falls_back(self) -> None:
         sections = parse_model_notes_sections(self.notes_path)
 
         proven = model_judgment_notes("openrouter/proven", sections)
-        self.assertEqual(1, len(proven))
-        self.assertIn("steady code-feature performance", proven[0])
+        self.assertEqual(6, len(proven))
+        self.assertIn("steady `code-feature` performance", proven[0])
         self.assertIn("Continuation line kept", proven[0])
+        self.assertNotIn("Non-dated setup", "\n".join(proven))
         self.assertEqual([], model_judgment_notes("openrouter/missing", sections))
 
     def test_notes_matching_uses_id_boundaries_and_best_heading(self) -> None:
