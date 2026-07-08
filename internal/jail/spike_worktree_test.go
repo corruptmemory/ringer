@@ -8,15 +8,21 @@
 // path only resolves if the parent repo is mounted at the SAME
 // (host-identical) path inside the jail. This spike measures exactly what
 // is needed for `git status` (and `git diff`) to work inside a jailed
-// worktree, isolating two variables:
+// worktree, isolating the variable ONE AT A TIME:
 //
-//   - Probe A (path-mismatched): parent repo mounted at a jail-internal
-//     path that does NOT match its host path. Hypothesis: git fails
-//     because the gitdir pointer's absolute path doesn't resolve.
-//   - Probe B (host-identical): both worktree and parent repo mounted at
-//     their host-identical absolute paths. Hypothesis: git succeeds, with
-//     the parent mounted read-only (status/diff don't need to write into
-//     the parent's .git/worktrees/<name> — only commit does).
+//   - Probe A (both mismatched): worktree AND parent at jail-internal
+//     paths. Establishes the baseline failure.
+//   - Probe B (both host-identical): worktree AND parent at their
+//     host-identical absolute paths, parent RO. Establishes the baseline
+//     success.
+//   - Probe C (worktree jail-internal, parent host-identical): the
+//     ISOLATING probe. A worktree's .git file only encodes the PARENT's
+//     absolute path (gitdir: <parent>/.git/worktrees/<name>); git
+//     status/diff resolve via that path and never consult a reverse
+//     pointer keyed on the worktree's own location. So C tests whether
+//     ONLY the parent needs a host-identical path while the worktree can
+//     live at a convenience path (/workspace). Whatever C shows is the
+//     finding — do not assume the hypothesis.
 //
 // Run manually: go test -tags=spike -run TestSpikeWorktreeInJail -v ./internal/jail/
 package jail
@@ -75,10 +81,12 @@ func TestSpikeWorktreeInJail(t *testing.T) {
 		t.Fatalf("edit hello.txt in worktree: %v", err)
 	}
 
-	// --- Probe A: parent repo mounted at a path that does NOT match its
-	// host path. The worktree's .git file points (via an absolute host
-	// path) at <repo>/.git/worktrees/wt-alpha; inside the jail that path
-	// must resolve to something, and here it deliberately does not.
+	// --- Probe A (baseline failure): BOTH worktree and parent mounted at
+	// jail-internal paths that do NOT match their host paths. The
+	// worktree's .git file points (via an absolute host path) at
+	// <repo>/.git/worktrees/wt-alpha; inside the jail that path must
+	// resolve to something, and here it deliberately does not. (Note this
+	// varies two things at once; Probe C isolates which one matters.)
 	rootA := filepath.Join(scratch, "jailroot-a")
 	jA := NewUnshareJail(rootA)
 	mountsA := append(HostMounts(rootA),
@@ -92,7 +100,7 @@ func TestSpikeWorktreeInJail(t *testing.T) {
 	defer jA.Teardown()
 
 	outA, errA := jA.Command("git", "-C", "/workspace", "-c", "safe.directory=*", "status").CombinedOutput()
-	t.Logf("PROBE A (parent at mismatched /parent-repo): err=%v\n%s", errA, outA)
+	t.Logf("PROBE A (both at mismatched jail-internal paths): err=%v\n%s", errA, outA)
 
 	// --- Probe B: both worktree and parent repo mounted at their
 	// host-identical absolute paths. Parent mounted READ-ONLY — testing
@@ -141,12 +149,50 @@ func TestSpikeWorktreeInJail(t *testing.T) {
 		t.Log("VERDICT (diff): git diff also succeeds with parent RO")
 	}
 
+	// --- Probe C (the ISOLATING probe): worktree at a JAIL-INTERNAL path
+	// (/workspace, RW), parent repo at its HOST-IDENTICAL absolute path
+	// (RO). If this succeeds, only the parent needs a host-identical path;
+	// the worktree can live at a convenience path. No safe.directory,
+	// consistent with Probe B's finding that it isn't required here.
+	//
+	// Same tmpfs-ordering gotcha: the parent's host-identical bind target
+	// lands under the jail's /tmp, so TmpfsMount(/tmp) must precede it.
+	// The worktree's /workspace target is NOT under /tmp, so its order is
+	// unconstrained.
+	rootC := filepath.Join(scratch, "jailroot-c")
+	jC := NewUnshareJail(rootC)
+	mountsC := append(HostMounts(rootC), TmpfsMount(filepath.Join(rootC, "tmp")))
+	mountsC = append(mountsC,
+		BindMount(wt, filepath.Join(rootC, "workspace"), false), // worktree rw, JAIL-INTERNAL path
+		BindMount(repo, filepath.Join(rootC, repo), true),       // parent RO, host-identical path
+	)
+	if err := jC.Setup(mountsC); err != nil {
+		t.Fatalf("jail C setup: %v", err)
+	}
+	defer jC.Teardown()
+
+	outC, errC := jC.Command("git", "-C", "/workspace", "status").CombinedOutput()
+	t.Logf("PROBE C (worktree at jail-internal /workspace, parent host-identical RO): status err=%v\n%s", errC, outC)
+
+	diffOutC, diffErrC := jC.Command("git", "-C", "/workspace", "diff").CombinedOutput()
+	t.Logf("PROBE C git diff (worktree at /workspace, parent host-identical RO): err=%v\n%s", diffErrC, diffOutC)
+
 	if errA == nil {
-		t.Log("VERDICT (probe A): path-mismatched parent did NOT break git status — hypothesis wrong, record reality")
+		t.Log("VERDICT (probe A): both-mismatched did NOT break git status — hypothesis wrong, record reality")
 	} else {
-		t.Log("VERDICT (probe A): path-mismatched parent breaks git status, as hypothesized")
+		t.Log("VERDICT (probe A): both-mismatched breaks git status (baseline failure)")
 	}
 
-	t.Log("VERDICT: worktrees need host-identical mount paths for the parent repo's gitdir pointer to resolve; parent RO sufficient for status" +
-		" (commit needs .git/worktrees/<name> writable — not probed here, left for Plan 2 if uncommitted-diff pattern changes)")
+	if errC == nil {
+		t.Log("VERDICT (probe C): ISOLATED — worktree at jail-internal /workspace works when parent is host-identical." +
+			" Only the PARENT needs a host-identical mount path; the worktree can live at a convenience path.")
+	} else {
+		t.Logf("VERDICT (probe C): worktree at jail-internal path FAILS even with parent host-identical: %v\n%s"+
+			" — both must be host-identical (now actually isolated).", errC, outC)
+	}
+	if diffErrC == nil {
+		t.Log("VERDICT (probe C diff): git diff also succeeds with worktree at /workspace + parent host-identical RO")
+	} else {
+		t.Logf("VERDICT (probe C diff): git diff fails: %v\n%s", diffErrC, diffOutC)
+	}
 }

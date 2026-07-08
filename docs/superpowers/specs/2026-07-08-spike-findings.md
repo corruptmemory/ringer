@@ -57,24 +57,44 @@
   `git worktree add wt-alpha` off it. An uncommitted edit was made to
   `hello.txt` in the worktree before jailing, to also exercise `git diff`
   (not just `git status`).
-- **Probe A (path-mismatched):** worktree bind-mounted rw at a
-  jail-internal path (`<rootA>/workspace`); parent repo bind-mounted RO at
-  a **different**, jail-internal path (`<rootA>/parent-repo`) that does
-  **not** match its host path.
+  Three probes vary the variable **one at a time** so the finding is
+  actually isolated (an earlier version of this doc changed two variables
+  between A and B and overstated the requirement — Probe C corrects it).
+- **Probe A (baseline failure — both mismatched):** worktree bind-mounted
+  rw at a jail-internal path (`<rootA>/workspace`) AND parent repo
+  bind-mounted RO at a **different**, jail-internal path
+  (`<rootA>/parent-repo`) that does **not** match its host path.
   Command inside jail: `git -C /workspace -c safe.directory=* status`.
-  **Verdict: FAILS**, exactly as hypothesized — the worktree's `.git` file
-  contains `gitdir: <host-repo-path>/.git/worktrees/wt-alpha`, an absolute
-  host path that does not resolve inside the jail when the parent repo is
-  mounted anywhere else.
-- **Probe B (host-identical):** both worktree and parent repo bind-mounted
-  at their **host-identical** absolute paths inside the jail
-  (`<rootB><host-abs-path>`), parent mounted **read-only**.
+  **Verdict: FAILS** (`fatal: not a git repository: (null)`, exit 128) —
+  the worktree's `.git` file contains
+  `gitdir: <host-repo-path>/.git/worktrees/wt-alpha`, an absolute host path
+  that does not resolve inside the jail when the parent repo is mounted
+  elsewhere. (Note: this varies two things at once — Probe C isolates
+  which one actually matters.)
+- **Probe B (baseline success — both host-identical):** both worktree and
+  parent repo bind-mounted at their **host-identical** absolute paths
+  inside the jail (`<rootB><host-abs-path>`), parent mounted **read-only**.
   Commands inside jail: `git -C <wt> -c safe.directory=* status` and
   `git -C <wt> -c safe.directory=* diff`.
   **Verdict: SUCCEEDS** for both `status` and `diff`, with the parent
   mounted read-only. `diff` correctly showed the uncommitted `hello.txt`
   edit, confirming RO parent access is sufficient to read the objects/refs
   needed for a working-tree diff, not just a status check.
+- **Probe C (the ISOLATING probe — worktree jail-internal, parent
+  host-identical):** worktree bind-mounted rw at a **jail-internal** path
+  (`<rootC>/workspace`); parent repo bind-mounted RO at its
+  **host-identical** absolute path. No `safe.directory` (consistent with
+  the incidental finding below).
+  Commands inside jail: `git -C /workspace status` and
+  `git -C /workspace diff`.
+  **Verdict: SUCCEEDS** for both `status` and `diff`. This is the decisive
+  result: **only the PARENT repo needs a host-identical mount path.** The
+  worktree itself can live at any convenience path (`/workspace`), because
+  a worktree's `.git` file only encodes the PARENT's absolute path
+  (`gitdir: <parent>/.git/worktrees/<name>`); git resolves via that pointer
+  and never consults a reverse pointer keyed on the worktree's own
+  location. Probe A failed because it moved the *parent*, not because it
+  moved the worktree.
 - **Incidental-noise check (dubious ownership):** the task brief predicted
   git running as ns-root (uid 0 inside the namespace) over host directories
   owned by uid 1000 would trigger "detected dubious ownership" and require
@@ -105,11 +125,11 @@
 
   ```
   === RUN   TestSpikeWorktreeInJail
-      spike_worktree_test.go:95: PROBE A (parent at mismatched /parent-repo): err=exit status 128
+      spike_worktree_test.go:103: PROBE A (both at mismatched jail-internal paths): err=exit status 128
           fatal: not a git repository: (null)
-      spike_worktree_test.go:124: id inside jail B: err=<nil>
+      spike_worktree_test.go:132: id inside jail B: err=<nil>
           uid=0(root) gid=0(root) groups=0(root)
-      spike_worktree_test.go:127: PROBE B diagnostic (host-identical paths, NO safe.directory): err=<nil>
+      spike_worktree_test.go:135: PROBE B diagnostic (host-identical paths, NO safe.directory): err=<nil>
           On branch wt-alpha
           Changes not staged for commit:
             (use "git add <file>..." to update what will be committed)
@@ -117,7 +137,7 @@
           	modified:   hello.txt
 
           no changes added to commit (use "git add" and/or "git commit -a")
-      spike_worktree_test.go:130: PROBE B (host-identical paths, parent RO, safe.directory=*): err=<nil>
+      spike_worktree_test.go:138: PROBE B (host-identical paths, parent RO, safe.directory=*): err=<nil>
           On branch wt-alpha
           Changes not staged for commit:
             (use "git add <file>..." to update what will be committed)
@@ -125,7 +145,7 @@
           	modified:   hello.txt
 
           no changes added to commit (use "git add" and/or "git commit -a")
-      spike_worktree_test.go:133: PROBE B git diff (host-identical paths, parent RO): err=<nil>
+      spike_worktree_test.go:141: PROBE B git diff (host-identical paths, parent RO): err=<nil>
           diff --git a/hello.txt b/hello.txt
           index ce01362..94954ab 100644
           --- a/hello.txt
@@ -133,21 +153,43 @@
           @@ -1 +1,2 @@
            hello
           +world
-      spike_worktree_test.go:141: VERDICT (diff): git diff also succeeds with parent RO
-      spike_worktree_test.go:147: VERDICT (probe A): path-mismatched parent breaks git status, as hypothesized
-      spike_worktree_test.go:150: VERDICT: worktrees need host-identical mount paths for the parent repo's gitdir pointer to resolve; parent RO sufficient for status (commit needs .git/worktrees/<name> writable — not probed here, left for Plan 2 if uncommitted-diff pattern changes)
-  --- PASS: TestSpikeWorktreeInJail (0.35s)
+      spike_worktree_test.go:149: VERDICT (diff): git diff also succeeds with parent RO
+      spike_worktree_test.go:175: PROBE C (worktree at jail-internal /workspace, parent host-identical RO): status err=<nil>
+          On branch wt-alpha
+          Changes not staged for commit:
+            (use "git add <file>..." to update what will be committed)
+            (use "git restore <file>..." to discard changes in working directory)
+          	modified:   hello.txt
+
+          no changes added to commit (use "git add" and/or "git commit -a")
+      spike_worktree_test.go:178: PROBE C git diff (worktree at /workspace, parent host-identical RO): err=<nil>
+          diff --git a/hello.txt b/hello.txt
+          index ce01362..94954ab 100644
+          --- a/hello.txt
+          +++ b/hello.txt
+          @@ -1 +1,2 @@
+           hello
+          +world
+      spike_worktree_test.go:183: VERDICT (probe A): both-mismatched breaks git status (baseline failure)
+      spike_worktree_test.go:187: VERDICT (probe C): ISOLATED — worktree at jail-internal /workspace works when parent is host-identical. Only the PARENT needs a host-identical mount path; the worktree can live at a convenience path.
+      spike_worktree_test.go:194: VERDICT (probe C diff): git diff also succeeds with worktree at /workspace + parent host-identical RO
+  --- PASS: TestSpikeWorktreeInJail (0.48s)
   PASS
-  ok  	github.com/corruptmemory/ringer/internal/jail	0.351s
+  ok  	github.com/corruptmemory/ringer/internal/jail	0.483s
   ```
 
 - Plan 2 consequence — the worktrees-mode jail mount rule:
-  - **Both the worktree and its parent repo MUST be bind-mounted at their
-    host-identical absolute paths** inside the jail. A jail-internal
-    convenience path (e.g. `/workspace`) for either one breaks git, because
-    the worktree's `.git` file embeds an absolute host path
-    (`gitdir: <host-repo>/.git/worktrees/<name>`) that git resolves
-    literally at runtime — there is no jail-relative rewriting.
+  - **Only the PARENT repo must be bind-mounted at its host-identical
+    absolute path** inside the jail (Probe C, isolated). The **worktree
+    can be bind-mounted at a jail-internal convenience path** (e.g.
+    `/workspace`) — this is simpler and avoids exposing host directory
+    structure inside the jail. The requirement exists because the
+    worktree's `.git` file embeds the *parent's* absolute host path
+    (`gitdir: <host-parent>/.git/worktrees/<name>`), which git resolves
+    literally at runtime with no jail-relative rewriting; the worktree's
+    own mount location is never encoded anywhere, so it is free.
+  - Concretely: `BindMount(worktree, "<root>/workspace", rw)` +
+    `BindMount(parentRepo, "<root><host-abs-path-of-parent>", ro)`.
   - **Parent repo RO is sufficient for `git status` and `git diff`.** Plan
     2's worktrees-mode mount table can mount the parent repo read-only for
     any lane that only needs to inspect/diff, which is the common case for
