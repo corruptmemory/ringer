@@ -3,6 +3,12 @@
 // namespaces + mount namespace + chroot. Do not diverge from upstream
 // without noting it here; deps are stdlib + golang.org/x/sys only.
 //
+// DIVERGENCE from upstream flywheel (2026-07-08): preflight.go gained a
+// mount-namespace capability probe and unshare_test.go's live tests now
+// skip when CheckUnsharePreflight().OK() is false, so the package is
+// portable to hosts with restricted unprivileged userns (e.g. CI runners,
+// hardened prod hosts).
+//
 // Package jail provides chroot jail lifecycle management with pluggable
 // implementations for root-based and user-namespace-based isolation.
 package jail

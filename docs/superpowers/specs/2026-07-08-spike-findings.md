@@ -243,3 +243,35 @@ present, `kernel.unprivileged_userns_clone=1`, and this user has both
 runs commands as ns-root here — consistent with Task 4's
 `TestUnshareJailRunsCommand` passing live and with this spike's own `id`
 probe reporting `uid=0(root)` inside the jail.
+
+### Update (2026-07-08, post-CI): mount-namespace capability probe added
+
+CI run `https://github.com/corruptmemory/ringer/actions/runs/28974880563`
+showed `TestUnshareJailRunsCommand` FAILING on `ubuntu-latest` (GitHub
+Actions) with `unshare: cannot change root filesystem propagation:
+Permission denied`, while `macos-latest` (which skips the whole jail
+suite — no Linux user namespaces) and the store multi-process smoke (S3,
+above) both passed. The three checks this section originally described
+(binary present, `unprivileged_userns_clone`, `/etc/subuid`+`/etc/subgid`)
+all reported `OK` on the GitHub runner too, so the live test didn't skip
+and instead crashed against a namespace that can't actually perform the
+mount operations the jail needs — the same failure mode a hardened
+production host could hit silently in the real product.
+
+`CheckUnsharePreflight()` now adds a fourth check: `MountNSUsable`. When
+`UnshareFound` is true, preflight actually invokes `unshare` with the same
+flag set `UnshareJail.Command()` uses (`--fork --pid --mount --map-auto
+--map-root-user --setuid 0 --setgid 0`), running `true` in place of the
+real bash script. If that invocation fails, its combined output is
+appended to `PreflightResult.Errors` (so `OK()` becomes `false`) instead
+of only being caught by a live jail run doing real work. This is cheap
+(runs `true`, side-effect-free) and only executes during preflight, which
+the product invokes when a task actually needs a jail.
+
+`unshare_test.go`'s `TestUnshareJailRunsCommand` already routed through
+`requireUnshare(t)` → `CheckUnsharePreflight()` → `t.Skipf(...)` on
+`!OK()`; no test-side change was needed beyond this preflight fix — the
+existing skip-guard now correctly fires on hosts like GitHub's
+`ubuntu-latest` runners where the mount-namespace probe fails, while it
+continues to run (and pass) live on this machine and any other host where
+the probe succeeds.

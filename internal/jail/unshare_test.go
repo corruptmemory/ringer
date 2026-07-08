@@ -19,8 +19,8 @@ func TestPreflightReportsStatus(t *testing.T) {
 	result := CheckUnsharePreflight()
 	// We don't assert pass/fail since it depends on the system,
 	// but we verify the struct is populated sensibly.
-	t.Logf("UnshareFound=%v UserNSEnabled=%v SubUIDMapped=%v SubGIDMapped=%v OK=%v",
-		result.UnshareFound, result.UserNSEnabled, result.SubUIDMapped, result.SubGIDMapped, result.OK())
+	t.Logf("UnshareFound=%v UserNSEnabled=%v SubUIDMapped=%v SubGIDMapped=%v MountNSUsable=%v OK=%v",
+		result.UnshareFound, result.UserNSEnabled, result.SubUIDMapped, result.SubGIDMapped, result.MountNSUsable, result.OK())
 	if !result.OK() {
 		t.Logf("Errors: %s", result.Error())
 	}

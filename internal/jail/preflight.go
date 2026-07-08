@@ -14,6 +14,7 @@ type PreflightResult struct {
 	UserNSEnabled bool
 	SubUIDMapped  bool
 	SubGIDMapped  bool
+	MountNSUsable bool
 	Errors        []string
 }
 
@@ -73,6 +74,33 @@ func CheckUnsharePreflight() PreflightResult {
 	if !result.SubGIDMapped {
 		result.Errors = append(result.Errors,
 			fmt.Sprintf("no /etc/subgid entry for %s; run: sudo usermod --add-subgids 100000-165535 %s", u.Username, u.Username))
+	}
+
+	// 4. Actually attempt the mount-namespace operation UnshareJail relies
+	// on. Checks 1-3 above are necessary but not sufficient: some hardened
+	// hosts (observed on GitHub Actions ubuntu-latest runners) pass all
+	// three yet still refuse the mount-propagation change unshare performs
+	// when creating a new mount namespace, failing with:
+	//   "unshare: cannot change root filesystem propagation: Permission denied"
+	// Only probe if the binary exists — no point invoking a command that's
+	// already known to be missing.
+	if result.UnshareFound {
+		// Mirrors the exact flag set UnshareJail.Command() uses (see
+		// unshare.go), swapping the real bash script for a no-op so the
+		// probe is cheap and side-effect-free.
+		probe := exec.Command("unshare",
+			"--fork", "--pid", "--mount",
+			"--map-auto", "--map-root-user",
+			"--setuid", "0", "--setgid", "0",
+			"--", "true",
+		)
+		out, err := probe.CombinedOutput()
+		if err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf(
+				"unshare cannot create a usable mount namespace (%s): %s", err, strings.TrimSpace(string(out))))
+		} else {
+			result.MountNSUsable = true
+		}
 	}
 
 	return result
