@@ -72,7 +72,8 @@ func (s *Store) Close() error { return s.db.Close() }
 func isBusy(err error) bool {
 	var se *sqlite.Error
 	if errors.As(err, &se) {
-		return se.Code() == 5 || se.Code() == 6 // SQLITE_BUSY, SQLITE_LOCKED
+		code := se.Code() & 0xff      // primary result code; modernc stores extended codes
+		return code == 5 || code == 6 // SQLITE_BUSY, SQLITE_LOCKED
 	}
 	return false
 }
