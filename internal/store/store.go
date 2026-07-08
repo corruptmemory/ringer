@@ -73,7 +73,19 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// errCheckpointBusy is a sentinel wrapped into the error Checkpoint returns
+// when `PRAGMA wal_checkpoint(TRUNCATE)` reports busy=1 in its result row.
+// wal_checkpoint signals contention via that result row rather than a Go
+// error/*sqlite.Error, so it can't be matched by the BUSY/LOCKED code check
+// below. Extending isBusy to also recognize this sentinel lets Checkpoint
+// reuse withBusyRetry's bounded backoff instead of a bespoke retry loop, so
+// checkpoint contention gets the same treatment as write contention.
+var errCheckpointBusy = errors.New("wal_checkpoint(TRUNCATE) busy: could not obtain checkpoint lock")
+
 func isBusy(err error) bool {
+	if errors.Is(err, errCheckpointBusy) {
+		return true
+	}
 	var se *sqlite.Error
 	if errors.As(err, &se) {
 		code := se.Code() & 0xff      // primary result code; modernc stores extended codes
@@ -116,9 +128,24 @@ func (s *Store) CountAttempts() (int64, error) {
 	return n, err
 }
 
+// Checkpoint runs a TRUNCATE-mode WAL checkpoint. `PRAGMA wal_checkpoint`
+// reports failure via a result row (busy, log, checkpointed), not a Go
+// error — db.Exec would silently discard that row and Checkpoint would
+// return nil even when nothing was truncated. Read the row explicitly and
+// treat busy!=0 as a retryable failure via withBusyRetry so a run-end
+// checkpoint that loses the race to a reader/writer is retried with bounded
+// backoff instead of silently no-op'ing (design spec §7 / cznic issue #179).
 func (s *Store) Checkpoint() error {
-	_, err := s.db.Exec(`PRAGMA wal_checkpoint(TRUNCATE);`)
-	return err
+	return withBusyRetry(func() error {
+		var busy, logFrames, checkpointed int
+		if err := s.db.QueryRow(`PRAGMA wal_checkpoint(TRUNCATE);`).Scan(&busy, &logFrames, &checkpointed); err != nil {
+			return err
+		}
+		if busy != 0 {
+			return fmt.Errorf("wal_checkpoint(TRUNCATE) busy: could not obtain checkpoint lock (log=%d checkpointed=%d): %w", logFrames, checkpointed, errCheckpointBusy)
+		}
+		return nil
+	})
 }
 
 func (s *Store) Integrity() error {
