@@ -10,3 +10,8 @@ hud/dist/
 hud/gen/
 hud/icons/icon.iconset/
 *.log
+
+# Claude Code personal per-project overrides
+.claude/settings.local.json
+
+/ringer
