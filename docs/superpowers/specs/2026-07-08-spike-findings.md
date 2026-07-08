@@ -52,7 +52,121 @@
 
 ## S2: worktrees x jail (spec §13.2)
 
-- (filled by Task 8)
+- Command: `go test -tags=spike -run TestSpikeWorktreeInJail -v ./internal/jail/`
+- Setup: a parent repo (`git init`, one commit adding `hello.txt`), then
+  `git worktree add wt-alpha` off it. An uncommitted edit was made to
+  `hello.txt` in the worktree before jailing, to also exercise `git diff`
+  (not just `git status`).
+- **Probe A (path-mismatched):** worktree bind-mounted rw at a
+  jail-internal path (`<rootA>/workspace`); parent repo bind-mounted RO at
+  a **different**, jail-internal path (`<rootA>/parent-repo`) that does
+  **not** match its host path.
+  Command inside jail: `git -C /workspace -c safe.directory=* status`.
+  **Verdict: FAILS**, exactly as hypothesized — the worktree's `.git` file
+  contains `gitdir: <host-repo-path>/.git/worktrees/wt-alpha`, an absolute
+  host path that does not resolve inside the jail when the parent repo is
+  mounted anywhere else.
+- **Probe B (host-identical):** both worktree and parent repo bind-mounted
+  at their **host-identical** absolute paths inside the jail
+  (`<rootB><host-abs-path>`), parent mounted **read-only**.
+  Commands inside jail: `git -C <wt> -c safe.directory=* status` and
+  `git -C <wt> -c safe.directory=* diff`.
+  **Verdict: SUCCEEDS** for both `status` and `diff`, with the parent
+  mounted read-only. `diff` correctly showed the uncommitted `hello.txt`
+  edit, confirming RO parent access is sufficient to read the objects/refs
+  needed for a working-tree diff, not just a status check.
+- **Incidental-noise check (dubious ownership):** the task brief predicted
+  git running as ns-root (uid 0 inside the namespace) over host directories
+  owned by uid 1000 would trigger "detected dubious ownership" and require
+  `-c safe.directory=*` or a global `safe.directory` config. **This did NOT
+  happen on this machine.** A diagnostic probe ran plain
+  `git -C <wt> status` (no `safe.directory` at all) inside the host-identical
+  jail and it succeeded cleanly — no ownership complaint. Root cause:
+  `UnshareJail.Command()` uses `unshare --map-root-user`, which identity-maps
+  the invoking real UID (1000, `jim`) to namespace UID 0. Host files owned by
+  uid 1000 therefore appear, from inside the namespace, as owned by uid 0 —
+  matching the git process's own euid 0. There is no UID mismatch to trigger
+  git's ownership check in this specific mapping mode. `-c safe.directory=*`
+  was still included on all probe commands defensively (cheap, harmless,
+  and correctly isolates this from the real path-mismatch signal being
+  tested) but is **not required** under `--map-root-user`. This would likely
+  differ under a `--map-auto`-only (multi-UID/subuid-range) mapping, which
+  Plan 2 should keep in mind if it ever changes the mapping mode.
+- **HOME:** not set/mounted inside the jail (no `/home` bind, `cmd.Env` left
+  at its default inherited value, so `HOME` pointed at the host's
+  `/home/jim`, which does not exist inside the chroot). No failure or
+  warning resulted — `git status`/`git diff` with `-c safe.directory=*`
+  read no config file that required `$HOME` to exist. **Not needed** for
+  this probe; flagged here in case a future probe (e.g. one that needs to
+  write `~/.gitconfig`, or a `git commit`) requires it.
+- `id` inside jail B: `uid=0(root) gid=0(root) groups=0(root)` — confirms
+  ns-root, consistent with T7's finding.
+- Verbatim output (from the `-v` run, `/tmp/spike-worktree.txt`):
+
+  ```
+  === RUN   TestSpikeWorktreeInJail
+      spike_worktree_test.go:95: PROBE A (parent at mismatched /parent-repo): err=exit status 128
+          fatal: not a git repository: (null)
+      spike_worktree_test.go:124: id inside jail B: err=<nil>
+          uid=0(root) gid=0(root) groups=0(root)
+      spike_worktree_test.go:127: PROBE B diagnostic (host-identical paths, NO safe.directory): err=<nil>
+          On branch wt-alpha
+          Changes not staged for commit:
+            (use "git add <file>..." to update what will be committed)
+            (use "git restore <file>..." to discard changes in working directory)
+          	modified:   hello.txt
+
+          no changes added to commit (use "git add" and/or "git commit -a")
+      spike_worktree_test.go:130: PROBE B (host-identical paths, parent RO, safe.directory=*): err=<nil>
+          On branch wt-alpha
+          Changes not staged for commit:
+            (use "git add <file>..." to update what will be committed)
+            (use "git restore <file>..." to discard changes in working directory)
+          	modified:   hello.txt
+
+          no changes added to commit (use "git add" and/or "git commit -a")
+      spike_worktree_test.go:133: PROBE B git diff (host-identical paths, parent RO): err=<nil>
+          diff --git a/hello.txt b/hello.txt
+          index ce01362..94954ab 100644
+          --- a/hello.txt
+          +++ b/hello.txt
+          @@ -1 +1,2 @@
+           hello
+          +world
+      spike_worktree_test.go:141: VERDICT (diff): git diff also succeeds with parent RO
+      spike_worktree_test.go:147: VERDICT (probe A): path-mismatched parent breaks git status, as hypothesized
+      spike_worktree_test.go:150: VERDICT: worktrees need host-identical mount paths for the parent repo's gitdir pointer to resolve; parent RO sufficient for status (commit needs .git/worktrees/<name> writable — not probed here, left for Plan 2 if uncommitted-diff pattern changes)
+  --- PASS: TestSpikeWorktreeInJail (0.35s)
+  PASS
+  ok  	github.com/corruptmemory/ringer/internal/jail	0.351s
+  ```
+
+- Plan 2 consequence — the worktrees-mode jail mount rule:
+  - **Both the worktree and its parent repo MUST be bind-mounted at their
+    host-identical absolute paths** inside the jail. A jail-internal
+    convenience path (e.g. `/workspace`) for either one breaks git, because
+    the worktree's `.git` file embeds an absolute host path
+    (`gitdir: <host-repo>/.git/worktrees/<name>`) that git resolves
+    literally at runtime — there is no jail-relative rewriting.
+  - **Parent repo RO is sufficient for `git status` and `git diff`.** Plan
+    2's worktrees-mode mount table can mount the parent repo read-only for
+    any lane that only needs to inspect/diff, which is the common case for
+    review/verification workers.
+  - **`git commit` was not probed** and needs `.git/worktrees/<name>`
+    (inside the parent repo's `.git` directory) writable — i.e., the parent
+    repo mount must switch to RW, or at minimum a targeted RW bind of
+    `<parent>/.git/worktrees/<name>`, for any lane that commits from inside
+    the jailed worktree. Re-probe before Plan 2 relies on jailed commits.
+  - **`safe.directory` handling:** include `-c safe.directory=*` (or
+    equivalent) defensively on jailed git invocations, but it was proven
+    *not required* under this jail's actual mapping mode
+    (`unshare --map-root-user`, which identity-maps the real UID to
+    namespace UID 0 and therefore preserves ownership matching for git's
+    dubious-ownership check). Do not assume this holds if Plan 2 ever
+    changes the UID-mapping mode away from `--map-root-user`.
+  - **`HOME`:** no special handling needed for `status`/`diff`. Revisit if
+    a jailed lane needs to write git config or perform operations that
+    touch `~/.gitconfig`.
 
 ## S3: modernc multi-process smoke (spec §13.3)
 
