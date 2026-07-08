@@ -33,8 +33,8 @@ type Store struct{ db *sql.DB }
 // Pragma discipline per the design spec §7. busy_timeout is a PRAGMA, and
 // the DSN carries no _txlock (cznic issue #192).
 var openPragmas = []string{
-	"PRAGMA journal_mode=WAL;",
 	"PRAGMA busy_timeout=5000;",
+	"PRAGMA journal_mode=WAL;",
 	"PRAGMA synchronous=NORMAL;",
 }
 
@@ -48,7 +48,11 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	for _, p := range openPragmas {
-		if _, err := db.Exec(p); err != nil {
+		p := p
+		if err := withBusyRetry(func() error {
+			_, err := db.Exec(p)
+			return err
+		}); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("store pragma %q: %w", p, err)
 		}
