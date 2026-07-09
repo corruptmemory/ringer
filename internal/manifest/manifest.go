@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 )
 
 type Task struct {
@@ -60,8 +62,11 @@ func FromBytes(data []byte) (*Manifest, error) {
 	if len(m.Tasks) == 0 {
 		errs = append(errs, errors.New("manifest must have at least one task"))
 	}
-	if m.Worktrees {
-		errs = append(errs, errors.New("worktrees mode lands in Plan 3, not yet supported"))
+	if m.Worktrees && m.Repo == "" {
+		// ringer.py silently falls back to plain directories when repo is
+		// missing (worktree ops guard on `repo is not None`) — a silent
+		// semantic downgrade. Fail loud instead: deliberate divergence.
+		errs = append(errs, errors.New("worktrees mode requires repo (the parent repository each task worktree is checked out from)"))
 	}
 	if m.MaxParallel < 0 {
 		errs = append(errs, errors.New("max_parallel must be >= 0"))
@@ -77,6 +82,18 @@ func FromBytes(data []byte) (*Manifest, error) {
 			}
 			seen[tk.Key] = true
 			where = "task " + tk.Key
+
+			// The key becomes the taskdir path component: it must stay
+			// inside workdir (ringer.py:7231-7236, moved to load time) and
+			// must not shadow the reserved <workdir>/logs directory (Go
+			// always writes worker logs there; stricter than Python, which
+			// reserves it only in worktrees mode).
+			rel, relErr := filepath.Rel(m.Workdir, filepath.Join(m.Workdir, tk.Key))
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				errs = append(errs, fmt.Errorf("task key escapes workdir: %s", tk.Key))
+			} else if rel == "logs" || strings.HasPrefix(rel, "logs"+string(filepath.Separator)) {
+				errs = append(errs, fmt.Errorf("task key %q collides with the reserved logs directory", tk.Key))
+			}
 		}
 		if tk.Spec == "" {
 			errs = append(errs, fmt.Errorf("%s: spec is required", where))
