@@ -101,7 +101,9 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	}
 
 	flushDone := make(chan struct{})
+	tickerDone := make(chan struct{}) // closed once the ticker goroutine has fully exited
 	go func() {
+		defer close(tickerDone)
 		t := time.NewTicker(1 * time.Second)
 		defer t.Stop()
 		for {
@@ -135,6 +137,7 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	wg.Wait()
 
 	close(flushDone)
+	<-tickerDone     // join: guarantees no in-flight writeState(false) can land after the final write below
 	writeState(true) // final flush, Done=true
 
 	// Result from the authoritative actor snapshot.
@@ -158,9 +161,14 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	if engineName == "" {
 		engineName = "codex"
 	}
-	engConf, ok := opts.Engines[engineName]
-	if !ok {
-		lg.Errorf("task %s: unknown engine %q", task.Key, engineName)
+	// engine.Resolve (not a raw map lookup) so engine:"" / "codex" falls back
+	// to engine.BuiltinCodex() when the config's Engines map has no explicit
+	// "codex" entry — this is the same resolution Preflight already runs, so
+	// a manifest that passes Preflight must not die here with "unknown
+	// engine" for the documented default.
+	engConf, err := engine.Resolve(opts.Engines, engineName)
+	if err != nil {
+		lg.Errorf("task %s: %v", task.Key, err)
 		a.setResult(task.Key, "failed", -1, task.Verified, "")
 		return
 	}
@@ -199,6 +207,10 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		attempts = attempt
 		a.setStatus(task.Key, "running", attempt)
 
+		// Timed from worker spawn through verify completion (Python parity:
+		// per-attempt wall time), so duration_s is populated for every row
+		// instead of left at its zero default.
+		attemptStart := time.Now()
 		bin, argv := engine.BuildArgv(engConf, taskDir, spec, model, task.EngineArgs, task.FullAccess)
 		lg.Infof("task %s: attempt %d: %s", task.Key, attempt, bin)
 		w := io.MultiWriter(opts.Stdout, col.sink(task.Key)) // tee live output into the collector
@@ -209,6 +221,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		tokens = scrapeTokens(engConf.TokenRegex, col.tail(task.Key, 64<<10)) // scrape the post-exit tail
 
 		vres := verify.Verify(ctx, taskDir, task.Check, task.ExpectFiles, timeout)
+		durationS := time.Since(attemptStart).Seconds()
 		switch {
 		case outcome.TimedOut:
 			verdict = "TIMEOUT"
@@ -224,7 +237,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 			if err := opts.Store.InsertAttempt(store.Attempt{
 				RunID: runID, RunName: opts.Manifest.RunName, TaskKey: task.Key,
 				Engine: engineName, Model: model, TaskType: task.TaskType,
-				Verdict: verdict, Retry: attempt - 1, Tokens: tokens,
+				Verdict: verdict, Retry: attempt - 1, DurationS: durationS, Tokens: tokens,
 				CheckOutput: vres.Output, Identity: opts.Identity,
 				CreatedAt: time.Now().UTC().Format(time.RFC3339),
 			}); err != nil {
