@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/corruptmemory/ringer/internal/config"
 )
 
 type Task struct {
@@ -70,6 +72,26 @@ func FromBytes(data []byte) (*Manifest, error) {
 	}
 	if m.MaxParallel < 0 {
 		errs = append(errs, errors.New("max_parallel must be >= 0"))
+	}
+	// Mirror ringer.py's Path(...).expanduser().resolve() (ringer.py:489,
+	// 494) at load time: a relative workdir would otherwise mean different
+	// things to git -C <repo> (which resolves against the repo) and to the
+	// runner's own MkdirAll/Stat/chdir (which resolve against the process
+	// CWD). Lexical Abs, not EvalSymlinks — symlink resolution is not
+	// load-bearing here.
+	if m.Workdir != "" {
+		if abs, err := filepath.Abs(config.ExpandUser(m.Workdir)); err == nil {
+			m.Workdir = abs
+		} else {
+			errs = append(errs, fmt.Errorf("workdir: %w", err))
+		}
+	}
+	if m.Repo != "" {
+		if abs, err := filepath.Abs(config.ExpandUser(m.Repo)); err == nil {
+			m.Repo = abs
+		} else {
+			errs = append(errs, fmt.Errorf("repo: %w", err))
+		}
 	}
 	seen := map[string]bool{}
 	for i, tk := range m.Tasks {

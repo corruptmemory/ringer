@@ -1,6 +1,8 @@
 package manifest
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -66,6 +68,40 @@ func TestTaskKeyEscapesWorkdir(t *testing.T) {
 	}`)
 	if _, err := FromBytes(body); err == nil || !strings.Contains(err.Error(), "escapes workdir") {
 		t.Fatalf("err = %v, want escape rejection", err)
+	}
+}
+
+// TestPathsNormalizedAtLoad guards against the taskDir-resolved-twice bug:
+// `git -C <repo> worktree add <taskdir>` resolves a relative taskdir against
+// <repo> (git chdirs first), while Go's os.MkdirAll/os.Stat/cmd.Dir resolve
+// it against the process CWD. ringer.py:489,494 prevents the split by
+// normalizing workdir/repo with Path(...).expanduser().resolve() at manifest
+// load time; FromBytes must mirror that.
+func TestPathsNormalizedAtLoad(t *testing.T) {
+	body := []byte(`{
+		"run_name": "norm", "workdir": "rel/work",
+		"worktrees": true, "repo": "~/some-repo",
+		"tasks": [{"key": "t1", "spec": "do the thing", "check": "true"}]
+	}`)
+	m, err := FromBytes(body)
+	if err != nil {
+		t.Fatalf("valid manifest rejected: %v", err)
+	}
+	if !filepath.IsAbs(m.Workdir) {
+		t.Errorf("workdir not made absolute: %q", m.Workdir)
+	}
+	if !strings.HasSuffix(m.Workdir, filepath.Join("rel", "work")) {
+		t.Errorf("workdir = %q, want suffix %q", m.Workdir, filepath.Join("rel", "work"))
+	}
+	if !filepath.IsAbs(m.Repo) {
+		t.Errorf("repo not made absolute: %q", m.Repo)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("os.UserHomeDir: %v", err)
+	}
+	if !strings.HasPrefix(m.Repo, home) {
+		t.Errorf("repo = %q, want ~ expanded under home %q", m.Repo, home)
 	}
 }
 

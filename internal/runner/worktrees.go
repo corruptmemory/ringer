@@ -49,6 +49,9 @@ func cleanupWorktreeOnPass(m *manifest.Manifest, lg logging.Logger, taskKey, tas
 	for _, name := range taskReportFilenames {
 		src := filepath.Join(taskDir, name)
 		if _, err := os.Stat(src); err != nil {
+			if !os.IsNotExist(err) {
+				lg.Warnf("task %s: report snapshot stat %s: %v", taskKey, name, err)
+			}
 			continue
 		}
 		if err := copyFile(src, filepath.Join(reportsDir, name)); err != nil {
