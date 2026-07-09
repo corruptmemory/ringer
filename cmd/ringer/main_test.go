@@ -76,3 +76,29 @@ func TestResolveLogLevel(t *testing.T) {
 		})
 	}
 }
+
+// TestFormatTokens is the RED/GREEN anchor for the final-review finding that
+// the verdict table's TOKENS column printed runner.TaskResult's -1 "unknown"
+// sentinel as a literal negative number. -1 (and any other negative value,
+// defensively) must render blank ("-"); a real token count must render as
+// its plain decimal digits, matching Python's behavior of leaving the column
+// empty when tokens are unknown.
+func TestFormatTokens(t *testing.T) {
+	cases := []struct {
+		name   string
+		tokens int64
+		want   string
+	}{
+		{"unknown sentinel renders blank", -1, "-"},
+		{"any negative value renders blank", -42, "-"},
+		{"zero tokens renders as 0", 0, "0"},
+		{"a real token count renders as digits", 1234, "1234"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := formatTokens(tc.tokens); got != tc.want {
+				t.Errorf("formatTokens(%d) = %q, want %q", tc.tokens, got, tc.want)
+			}
+		})
+	}
+}

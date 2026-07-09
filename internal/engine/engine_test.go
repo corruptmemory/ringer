@@ -79,15 +79,35 @@ func TestPreflightMissingBin(t *testing.T) {
 	}
 }
 
+// TestParseTokens is the canonical coverage for ParseTokens, merged from the
+// engine-side table (basic capture group, empty-regex sentinel, no-match
+// sentinel) and the runner-side scrapeTokens it replaces (bad-regex
+// sentinel, last-match-wins, last-capture-group vs whole-match fallback,
+// TrimSpace on the matched text) after the reviewer adjudicated
+// scrapeTokens' semantics as the correct ones to keep as the single
+// canonical implementation.
 func TestParseTokens(t *testing.T) {
-	got := ParseTokens(`"tokens":\{"total":([0-9]+)`, `blah "tokens":{"total":1234} blah`)
-	if got != 1234 {
-		t.Errorf("ParseTokens = %d, want 1234", got)
+	cases := []struct {
+		name       string
+		tokenRegex string
+		output     string
+		want       int64
+	}{
+		{"basic capture group", `"tokens":\{"total":([0-9]+)`, `blah "tokens":{"total":1234} blah`, 1234},
+		{"empty regex sentinel", "", "anything", -1},
+		{"bad regex sentinel (unclosed group)", `total=(unclosed`, "anything", -1},
+		{"no match sentinel", `total=([0-9]+)`, "no match here", -1},
+		{"last match wins over an earlier, smaller one", `total=([0-9]+)`, "total=100 ... total=200 done", 200},
+		{"last capture group within a match is used, not the first", `a=([0-9]+) b=([0-9]+)`, "a=1 b=2", 2},
+		{"whole-match fallback when the regex has no capture group", `[0-9]+`, "count 42", 42},
+		{"leading whitespace inside the capture group is trimmed", `total=(\s*[0-9]+)`, "total=   42", 42},
+		{"non-numeric match yields the sentinel", `total=(\w+)`, "total=abc", -1},
 	}
-	if ParseTokens("", "anything") != -1 {
-		t.Errorf("empty regex must yield -1")
-	}
-	if ParseTokens(`total=([0-9]+)`, "no match here") != -1 {
-		t.Errorf("no match must yield -1")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ParseTokens(tc.tokenRegex, tc.output); got != tc.want {
+				t.Errorf("ParseTokens(%q, %q) = %d, want %d", tc.tokenRegex, tc.output, got, tc.want)
+			}
+		})
 	}
 }

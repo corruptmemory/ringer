@@ -10,7 +10,9 @@ import (
 
 func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 	keys := []string{"a", "b", "c"}
-	a := newActor("r1", "demo", "id", keys, logging.Default())
+	engineByKey := map[string]string{"a": "codex", "b": "codex", "c": "mock"}
+	modelByKey := map[string]string{"a": "gpt-5", "b": "gpt-5", "c": ""}
+	a := newActor("r1", "demo", "id", keys, engineByKey, modelByKey, logging.Default())
 	a.start()
 	defer a.stopAndWait()
 
@@ -33,6 +35,15 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 		if tv.Status != "passed" || tv.Tokens != 100 {
 			t.Errorf("task %s not settled: %+v", tv.Key, tv)
 		}
+		// Engine/Model are seeded at construction and must survive the
+		// setStatus/setResult mutations above untouched — opSetStatus and
+		// opSetResult never write those fields.
+		if tv.Engine != engineByKey[tv.Key] {
+			t.Errorf("task %s: Engine = %q, want %q", tv.Key, tv.Engine, engineByKey[tv.Key])
+		}
+		if tv.Model != modelByKey[tv.Key] {
+			t.Errorf("task %s: Model = %q, want %q", tv.Key, tv.Model, modelByKey[tv.Key])
+		}
 	}
 }
 
@@ -44,7 +55,7 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 func TestActorDoubleStopLogsWarning(t *testing.T) {
 	const runID = "r1"
 	lg, capture := logging.NewCapture()
-	a := newActor(runID, "demo", "id", []string{"a"}, lg)
+	a := newActor(runID, "demo", "id", []string{"a"}, nil, nil, lg)
 	a.start()
 
 	a.stopAndWait()

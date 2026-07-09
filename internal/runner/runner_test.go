@@ -112,6 +112,20 @@ func TestRunEndToEndMockEngine(t *testing.T) {
 		t.Errorf("run-state PID = %d, want %d", rs.PID, os.Getpid())
 	}
 
+	// Every task in the manifest set Engine: "mock" explicitly, so the
+	// written run-state JSON's TaskView.Engine must reflect that — not the
+	// zero value "" a never-assigned field would serialize (final-review
+	// finding: TaskView.Engine/Model were declared with JSON tags but never
+	// populated).
+	if len(rs.Tasks) != 2 {
+		t.Fatalf("run-state has %d tasks, want 2", len(rs.Tasks))
+	}
+	for _, tv := range rs.Tasks {
+		if tv.Engine != "mock" {
+			t.Errorf("task %s: run-state Engine = %q, want %q", tv.Key, tv.Engine, "mock")
+		}
+	}
+
 	// active-runs.json no longer references this run: UnregisterActiveRun ran.
 	active, err := state.ReadActiveRuns(stateDir)
 	if err != nil {

@@ -37,10 +37,17 @@ type actor struct {
 	tasks                    map[string]*state.TaskView
 }
 
-func newActor(runID, runName, identity string, keys []string, lg logging.Logger) *actor {
+// newActor seeds each key's TaskView with its effective engine/model, known
+// (via runner.resolveTaskEngine) before any attempt runs — engine/model are
+// static per task for the life of the run, so they're set once here rather
+// than threaded through every setStatus/setResult call. engineByKey/
+// modelByKey may omit a key (or newActor may be called with nil maps in
+// tests that don't care), in which case that TaskView's Engine/Model stays
+// the zero value "".
+func newActor(runID, runName, identity string, keys []string, engineByKey, modelByKey map[string]string, lg logging.Logger) *actor {
 	tasks := make(map[string]*state.TaskView, len(keys))
 	for _, k := range keys {
-		tasks[k] = &state.TaskView{Key: k, Status: "pending"}
+		tasks[k] = &state.TaskView{Key: k, Engine: engineByKey[k], Model: modelByKey[k], Status: "pending"}
 	}
 	return &actor{
 		runID: runID, runName: runName, identity: identity, keys: keys,

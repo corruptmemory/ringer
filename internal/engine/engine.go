@@ -75,6 +75,15 @@ func Preflight(engines map[string]config.EngineConfig, used map[string]bool) err
 	return errors.Join(errs...)
 }
 
+// ParseTokens pulls a token count out of output using tokenRegex: it takes
+// the LAST match (an engine's running output often reports a token total
+// more than once, so the final report wins over an earlier, smaller one),
+// and within that match prefers the last capture group, falling back to the
+// whole match when the regex has no groups. TrimSpace guards against
+// regexes whose capture group includes surrounding whitespace. Returns -1
+// (the "unknown" sentinel) when: tokenRegex is empty, tokenRegex fails to
+// compile, there's no match, or the matched text isn't a valid base-10
+// integer.
 func ParseTokens(tokenRegex, output string) int64 {
 	if tokenRegex == "" {
 		return -1
@@ -83,11 +92,13 @@ func ParseTokens(tokenRegex, output string) int64 {
 	if err != nil {
 		return -1
 	}
-	m := re.FindStringSubmatch(output)
-	if len(m) < 2 {
+	matches := re.FindAllStringSubmatch(output, -1)
+	if len(matches) == 0 {
 		return -1
 	}
-	n, err := strconv.ParseInt(m[1], 10, 64)
+	last := matches[len(matches)-1]
+	grp := last[len(last)-1]
+	n, err := strconv.ParseInt(strings.TrimSpace(grp), 10, 64)
 	if err != nil {
 		return -1
 	}

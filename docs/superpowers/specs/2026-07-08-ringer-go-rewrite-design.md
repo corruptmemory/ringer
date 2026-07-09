@@ -124,7 +124,7 @@ jail_state_dirs = ["~/.config/opencode", "~/.local/share/opencode"]  # rw binds
 1. Manifest JSON schema (all task + run-level fields incl. `worktrees`, `full_access`, `engine_args`, `verified`, `task_type`).
 2. Config TOML schema minus removed keys, plus `isolation`/`jail_state_dirs`.
 3. Engine spawn contract: args_template DSL, cwd, stdin closed, merged raw output, token_regex, full-access gating. `engines/opencode-sandboxed.sh` keeps working unchanged (macOS).
-4. On-disk: `~/.ringer/runs/<id>.json` schema, `active-runs.json`, artifacts tree + `library.json`, `nudge-state/`, worker log locations (taskdir or `workdir/logs/` in worktrees mode).
+4. On-disk: `~/.ringer/runs/<id>.json` schema, `active-runs.json`, artifacts tree + `library.json`, `nudge-state/`, worker log locations (taskdir or `workdir/logs/` in worktrees mode). **Adjudicated 2026-07-09 (Plan 2 final review):** `active-runs.json` keeps Python parity (5-field entries incl. `workdir`; prune-on-write) because both eras write the shared file. `runs/<id>.json` is **Go-authoritative** (the Task 5 Go schema, `done:bool` etc.) — it is written only by Go runs; the Python HUD is out-of-scope for Go-written state dirs, and Plan 4's Go HUD reads the Go schema.
 5. HTTP API consumed by `ringside.html` (§8 list).
 6. CLI surface per SKILL.md: `lint` before `run`, `demo`, `--dry-run`, `--identity`, `models [--task-type|--explore|--open]`, `catalog --changes`, `hud`, `install-agent`.
 7. `registry/model-identity.toml` format.

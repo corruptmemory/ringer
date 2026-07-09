@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
@@ -121,12 +122,25 @@ func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag 
 
 	fmt.Fprintf(os.Stdout, "\n%-20s %-8s %-9s %s\n", "TASK", "VERDICT", "ATTEMPTS", "TOKENS")
 	for _, r := range res.Results {
-		fmt.Fprintf(os.Stdout, "%-20s %-8s %-9d %d\n", r.Key, r.Verdict, r.Attempts, r.Tokens)
+		fmt.Fprintf(os.Stdout, "%-20s %-8s %-9d %s\n", r.Key, r.Verdict, r.Attempts, formatTokens(r.Tokens))
 	}
 	if !res.AllPassed {
 		return fmt.Errorf("run %s: one or more tasks failed", res.RunID)
 	}
 	return nil
+}
+
+// formatTokens renders a TaskResult's token count for the verdict table.
+// runner.TaskResult.Tokens uses -1 as its "unknown" sentinel (no token_regex
+// configured, the regex didn't compile, or nothing matched) — printing that
+// literal -1 would look like a real, if odd, token count rather than "we
+// don't know." Blank it out instead, matching Python's behavior of leaving
+// the column empty when tokens are unknown.
+func formatTokens(tokens int64) string {
+	if tokens < 0 {
+		return "-"
+	}
+	return strconv.FormatInt(tokens, 10)
 }
 
 func init() {

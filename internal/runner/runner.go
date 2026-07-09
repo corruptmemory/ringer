@@ -6,9 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -73,7 +70,22 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	runID := fmt.Sprintf("%s-%d", m.RunName, time.Now().UnixNano())
 	startedAt := time.Now().UTC().Format(time.RFC3339)
 
-	a := newActor(runID, m.RunName, opts.Identity, keys, lg)
+	// Seed each TaskView's Engine/Model at construction from the same
+	// resolution runTask itself will apply (resolveTaskEngine), so the
+	// written run-state JSON reports the effective engine/model from the
+	// first snapshot onward instead of serializing "" until the task
+	// actually starts running. Best-effort: an unresolvable engine name is
+	// still surfaced here (as the raw/defaulted name) even though runTask
+	// will fail that task fast — display, not execution, is what this seeds.
+	engineByKey := make(map[string]string, len(m.Tasks))
+	modelByKey := make(map[string]string, len(m.Tasks))
+	for _, t := range m.Tasks {
+		engineName, _, model, _ := resolveTaskEngine(opts.Engines, t)
+		engineByKey[t.Key] = engineName
+		modelByKey[t.Key] = model
+	}
+
+	a := newActor(runID, m.RunName, opts.Identity, keys, engineByKey, modelByKey, lg)
 	a.start()
 	defer a.stopAndWait()
 
@@ -86,8 +98,18 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	// RegisterActiveRun's real signature carries workdir as a 5th field
 	// (Python-parity review fix) and orders identity/runName/workdir before
 	// pid/startedAt — the brief's literal call predates that signature.
-	_ = state.RegisterActiveRun(opts.StateDir, runID, opts.Identity, m.RunName, m.Workdir, os.Getpid(), startedAt)
-	defer func() { _ = state.UnregisterActiveRun(opts.StateDir, runID) }()
+	//
+	// Register/unregister failures are non-fatal (the run itself doesn't
+	// depend on active-runs.json) but must not be silent — logged at Warn,
+	// mirroring how writeState's WriteRunState failures are logged just below.
+	if err := state.RegisterActiveRun(opts.StateDir, runID, opts.Identity, m.RunName, m.Workdir, os.Getpid(), startedAt); err != nil {
+		lg.Warnf("run %s: register active run: %v", runID, err)
+	}
+	defer func() {
+		if err := state.UnregisterActiveRun(opts.StateDir, runID); err != nil {
+			lg.Warnf("run %s: unregister active run: %v", runID, err)
+		}
+	}()
 
 	writeState := func(done bool) {
 		s := a.snapshot()
@@ -155,18 +177,38 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	return res, nil
 }
 
-// runTask runs one manifest task through up to two attempts.
-func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg logging.Logger, runID string, task manifest.Task) {
-	engineName := task.Engine
+// resolveTaskEngine resolves a task's effective engine name, engine config,
+// and model in one place: engineName applies the "" -> "codex" default (the
+// same default engine.Resolve itself applies, kept explicit here so callers
+// can key maps by it before engine.Resolve runs), then engine.Resolve (not a
+// raw map lookup) so engine:"" / "codex" falls back to engine.BuiltinCodex()
+// when the config's Engines map has no explicit "codex" entry — this is the
+// same resolution Preflight already runs, so a manifest that passes
+// Preflight must not die here with "unknown engine" for the documented
+// default. model applies task.Model, falling back to the resolved engine's
+// ModelDefault when the task didn't pin one (only meaningful when err is
+// nil; on error engConf is the zero value and ModelDefault is "").
+//
+// Used both to seed each TaskView's Engine/Model at actor construction
+// (before any attempt runs, in Run) and by runTask itself, so the
+// initially-displayed values and the values actually used to run can never
+// diverge.
+func resolveTaskEngine(engines map[string]config.EngineConfig, task manifest.Task) (engineName string, engConf config.EngineConfig, model string, err error) {
+	engineName = task.Engine
 	if engineName == "" {
 		engineName = "codex"
 	}
-	// engine.Resolve (not a raw map lookup) so engine:"" / "codex" falls back
-	// to engine.BuiltinCodex() when the config's Engines map has no explicit
-	// "codex" entry — this is the same resolution Preflight already runs, so
-	// a manifest that passes Preflight must not die here with "unknown
-	// engine" for the documented default.
-	engConf, err := engine.Resolve(opts.Engines, engineName)
+	engConf, err = engine.Resolve(engines, engineName)
+	model = task.Model
+	if model == "" {
+		model = engConf.ModelDefault
+	}
+	return engineName, engConf, model, err
+}
+
+// runTask runs one manifest task through up to two attempts.
+func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg logging.Logger, runID string, task manifest.Task) {
+	engineName, engConf, model, err := resolveTaskEngine(opts.Engines, task)
 	if err != nil {
 		lg.Errorf("task %s: %v", task.Key, err)
 		a.setResult(task.Key, "failed", -1, task.Verified, "")
@@ -188,10 +230,6 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	_ = os.MkdirAll(logsDir, 0o755)
 	logPath := filepath.Join(logsDir, task.Key+".worker.log")
 
-	model := task.Model
-	if model == "" {
-		model = engConf.ModelDefault
-	}
 	timeoutS := task.TimeoutS
 	if timeoutS == 0 {
 		timeoutS = defaultTimeoutS
@@ -218,7 +256,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		if outcome.Err != nil {
 			lg.Errorf("task %s: spawn error: %v", task.Key, outcome.Err)
 		}
-		tokens = scrapeTokens(engConf.TokenRegex, col.tail(task.Key, 64<<10)) // scrape the post-exit tail
+		tokens = engine.ParseTokens(engConf.TokenRegex, col.tail(task.Key, 64<<10)) // scrape the post-exit tail
 
 		vres := verify.Verify(ctx, taskDir, task.Check, task.ExpectFiles, timeout)
 		durationS := time.Since(attemptStart).Seconds()
@@ -257,30 +295,6 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 
 	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath)
 	lg.Infof("task %s: %s (%d attempt(s), tokens=%d)", task.Key, verdict, attempts, tokens)
-}
-
-// scrapeTokens pulls a token count from the tail using the engine's
-// token_regex (last match wins; last capture group, or whole match if none).
-// Returns -1 when unknown.
-func scrapeTokens(tokenRegex, tail string) int64 {
-	if tokenRegex == "" {
-		return -1
-	}
-	re, err := regexp.Compile(tokenRegex)
-	if err != nil {
-		return -1
-	}
-	matches := re.FindAllStringSubmatch(tail, -1)
-	if len(matches) == 0 {
-		return -1
-	}
-	last := matches[len(matches)-1]
-	grp := last[len(last)-1]
-	n, err := strconv.ParseInt(strings.TrimSpace(grp), 10, 64)
-	if err != nil {
-		return -1
-	}
-	return n
 }
 
 func statusToVerdict(status string) string {
