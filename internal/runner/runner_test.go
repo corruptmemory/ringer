@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite" // driver registration only: opens a second, read-only connection to the store's db file for row assertions (see TestRunEndToEndMockEngineWithStore)
 
@@ -314,5 +317,67 @@ func TestRunEndToEndMockEngineWithStore(t *testing.T) {
 		if r.DurationS <= 0 {
 			t.Errorf("row %d: DurationS = %v, want > 0", i, r.DurationS)
 		}
+	}
+}
+
+func TestRunInterruptedTearsDownCleanly(t *testing.T) {
+	sleepBin, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep not on PATH: %v", err)
+	}
+	workdir := t.TempDir()
+	stateDir := t.TempDir()
+	m := &manifest.Manifest{
+		RunName: "interrupt-e2e",
+		Workdir: workdir,
+		Tasks: []manifest.Task{
+			{Key: "snoozer", Spec: "sleep", Check: "true", Engine: "snooze", TimeoutS: 60},
+		},
+	}
+	engines := map[string]config.EngineConfig{
+		"snooze": {Bin: sleepBin, ArgsTemplate: []string{"30"}},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	res, err := Run(ctx, Options{
+		Manifest: m, Engines: engines, StateDir: stateDir,
+		Identity: "test", Stdout: io.Discard, Logger: logging.Default(),
+	})
+	if time.Since(start) > 15*time.Second {
+		t.Fatal("interrupt did not cut the run short")
+	}
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want wrapped context.Canceled", err)
+	}
+	if len(res.Results) != 1 || res.Results[0].Verdict == "PASS" {
+		t.Fatalf("results = %+v, want one non-PASS result", res.Results)
+	}
+	if res.Results[0].Attempts != 1 {
+		t.Fatalf("attempts = %d: an interrupted task must not retry", res.Results[0].Attempts)
+	}
+	// The final state file must be flushed with done:true — a run killed by
+	// Ctrl-C must not read as still-running forever.
+	data, err := os.ReadFile(filepath.Join(stateDir, "runs", res.RunID+".json"))
+	if err != nil {
+		t.Fatalf("run-state file: %v", err)
+	}
+	var s state.RunState
+	if err := json.Unmarshal(data, &s); err != nil {
+		t.Fatal(err)
+	}
+	if !s.Done {
+		t.Fatalf("run-state done = false, want true after interrupt")
+	}
+	// active-runs.json must not still list this run.
+	active, err := state.ReadActiveRuns(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := active[res.RunID]; ok {
+		t.Fatal("active-runs.json still lists the interrupted run")
 	}
 }

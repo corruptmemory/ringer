@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
@@ -27,7 +29,22 @@ type runCmd struct {
 }
 
 func (c *runCmd) Execute(args []string) error {
-	return runManifestFile(c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun)
+	ctx, stop := signalContext()
+	defer stop()
+	return runManifestFile(ctx, c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun)
+}
+
+// signalContext returns a context canceled by the first SIGINT/SIGTERM.
+// After that first signal the handler unregisters itself, so a second
+// Ctrl-C falls back to default disposition and kills the process
+// immediately — graceful teardown must never trap an impatient user.
+func signalContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
 }
 
 // runManifestFile is the shared execution path behind both `run` and `demo`:
@@ -37,7 +54,7 @@ func (c *runCmd) Execute(args []string) error {
 // `demo` reaches this exact function (not a reimplementation) by writing its
 // generated manifest to a temp path and calling this with that path — this
 // is the "same path run uses" the Task 11 brief calls for.
-func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag string, dryRun bool) error {
+func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverride int, identityFlag string, dryRun bool) error {
 	cfgPath := opts.Config
 	if cfgPath == "" {
 		cfgPath = config.DefaultPath()
@@ -111,7 +128,7 @@ func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag 
 		defer st.Close()
 	}
 
-	res, err := runner.Run(context.Background(), runner.Options{
+	res, err := runner.Run(ctx, runner.Options{
 		Manifest: m, Engines: engines, StateDir: cfg.StateDirPath(),
 		Identity: identity, Store: st, Stdout: os.Stdout, Logger: lg,
 		MaxParallel: m.MaxParallel,

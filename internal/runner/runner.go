@@ -174,6 +174,13 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 			Key: tv.Key, Verdict: verdict, Attempts: tv.Attempt, Tokens: tv.Tokens,
 		})
 	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// Teardown already ran: final state flushed (done:true), actor and
+		// collector stopping via defers, active-runs unregistering via
+		// defer. Surface the interruption so the CLI exits non-zero.
+		return res, fmt.Errorf("run %s interrupted: %w", runID, ctxErr)
+	}
 	return res, nil
 }
 
@@ -260,6 +267,15 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout, nil)
 		if outcome.Err != nil {
 			lg.Errorf("task %s: spawn error: %v", task.Key, outcome.Err)
+		}
+		if outcome.Canceled || ctx.Err() != nil {
+			// User interrupt: no verify, no eval row (nothing meaningful
+			// ran to completion), no retry — mirror Python, where Ctrl-C
+			// aborts before _log_attempt. The actor still records the
+			// final status below so the last state flush is truthful.
+			lg.Warnf("task %s: interrupted", task.Key)
+			verdict = "ERROR"
+			break
 		}
 		tokens = engine.ParseTokens(engConf.TokenRegex, col.tail(task.Key, 64<<10)) // scrape the post-exit tail
 
