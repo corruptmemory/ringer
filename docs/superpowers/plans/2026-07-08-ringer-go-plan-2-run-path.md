@@ -1058,7 +1058,9 @@ type actor struct { /* unexported: cmds chan, state map, meta */ }
 
 func newActor(runID, runName, identity string, keys []string) *actor
 func (a *actor) start()                                  // launches the goroutine
-func (a *actor) stop()                                   // closes cmds, waits
+func (a *actor) stop()                                   // idempotent trigger: recover-guarded close(cmds); logs a recovered double-stop
+func (a *actor) wait()                                   // blocks until the goroutine exits (sync.WaitGroup — N callers ok)
+func (a *actor) stopAndWait()                            // convenience: stop() then wait()
 func (a *actor) setStatus(key, status string, attempt int)
 func (a *actor) setResult(key, status string, tokens int64, verified, logPath string)
 func (a *actor) snapshot() state.RunState                // synchronous request/reply
@@ -1081,7 +1083,7 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 	keys := []string{"a", "b", "c"}
 	a := newActor("r1", "demo", "id", keys)
 	a.start()
-	defer a.stop()
+	defer a.stopAndWait()
 
 	var wg sync.WaitGroup
 	for _, k := range keys {
@@ -1110,11 +1112,16 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 
 - [ ] **Step 3: Implement** the actor: a `cmds chan func()` (each command is a closure run on the actor goroutine — simplest correct actor in Go), the private `map[string]*state.TaskView`, ordered `keys` for stable snapshot order, and `snapshot()` posting a closure that copies the map into a `state.RunState` and sends it on a reply channel.
 
+  **Lifecycle protocol** (see the `actor-pattern` skill, "Lifecycle"): `stop` and `wait` are separate operations. `wait()` is a `sync.WaitGroup` (`Add(1)` before the goroutine, `defer Done()` inside it) so any number of callers may wait. `stop()` is a `recover`-guarded `close(a.cmds)` — drain-then-exit — that logs a recovered double-stop (keyed by `runID`) rather than swallowing it silently, and returns immediately without waiting. `stopAndWait()` is the named convenience so a blocking wait is never hidden inside a method called `stop`.
+
 ```go
 // internal/runner/actor.go
 package runner
 
 import (
+	"log"
+	"sync"
+
 	"github.com/corruptmemory/ringer/internal/state"
 )
 
@@ -1122,7 +1129,7 @@ type actor struct {
 	runID, runName, identity string
 	keys                     []string
 	cmds                     chan func()
-	done                     chan struct{}
+	wg                       sync.WaitGroup // wait() blocks on this — N callers ok
 	tasks                    map[string]*state.TaskView
 }
 
@@ -1133,23 +1140,44 @@ func newActor(runID, runName, identity string, keys []string) *actor {
 	}
 	return &actor{
 		runID: runID, runName: runName, identity: identity, keys: keys,
-		cmds: make(chan func()), done: make(chan struct{}), tasks: tasks,
+		cmds: make(chan func()), tasks: tasks,
 	}
 }
 
 func (a *actor) start() {
+	a.wg.Add(1)
 	go func() {
-		for fn := range a.cmds {
+		defer a.wg.Done()
+		for fn := range a.cmds { // drain accepted commands, then exit
 			fn()
 		}
-		close(a.done)
 	}()
 }
 
+// stop is the shutdown trigger: it closes cmds (drain-then-exit) and returns
+// immediately — it does NOT wait. It is idempotent: a second or concurrent
+// stop re-closes cmds, panics, and is recovered. A recovered double-stop is a
+// correct no-op but also evidence of a stray stop() caller, so it is logged
+// (never swallowed), keyed by runID. Add debug.Stack() to the log line when
+// hunting the wayward caller. Producers must have quiesced before stop() —
+// do() is synchronous, so once every caller has returned there are no in-flight
+// commands and nothing left to drain.
 func (a *actor) stop() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("runner actor %s: recovered panic in stop (double stop?): %v", a.runID, r)
+		}
+	}()
 	close(a.cmds)
-	<-a.done
 }
+
+// wait blocks until the actor goroutine has exited. Safe for any number of
+// callers (it is a sync.WaitGroup).
+func (a *actor) wait() { a.wg.Wait() }
+
+// stopAndWait is the named convenience for "stop, then block until exited" —
+// the blocking wait is visible at the call site, never hidden inside stop().
+func (a *actor) stopAndWait() { a.stop(); a.wait() }
 
 func (a *actor) do(fn func()) {
 	done := make(chan struct{})
