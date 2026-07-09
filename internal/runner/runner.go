@@ -74,8 +74,8 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	if lg == nil {
 		lg = logging.Default()
 	}
-	if m.Worktrees {
-		return RunResult{}, fmt.Errorf("worktrees mode lands in Plan 3")
+	if m.Worktrees && m.Repo == "" {
+		return RunResult{}, fmt.Errorf("worktrees mode requires repo (manifest validation should have caught this)")
 	}
 
 	keys := make([]string, len(m.Tasks))
@@ -244,8 +244,8 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	}
 
 	taskDir := filepath.Join(opts.Manifest.Workdir, task.Key)
-	if err := os.MkdirAll(taskDir, 0o755); err != nil {
-		lg.Errorf("task %s: mkdir %s: %v", task.Key, taskDir, err)
+	if err := prepareTaskDir(opts.Manifest, taskDir); err != nil {
+		lg.Errorf("task %s: prepare taskdir: %v", task.Key, err)
 		a.setResult(task.Key, "failed", -1, task.Verified, "")
 		return
 	}
@@ -328,6 +328,10 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 			spec = task.Spec + "\n\n--- Previous attempt failed. Check output:\n" + capTail(vres.Output, failureContextMax)
 			lg.Warnf("task %s: attempt 1 %s; retrying", task.Key, verdict)
 		}
+	}
+
+	if verdict == "PASS" {
+		cleanupWorktreeOnPass(opts.Manifest, lg, task.Key, taskDir, logsDir)
 	}
 
 	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath)
