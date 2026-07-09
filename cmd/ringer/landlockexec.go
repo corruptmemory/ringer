@@ -9,6 +9,8 @@ import (
 	"syscall"
 
 	"github.com/landlock-lsm/go-landlock/landlock"
+
+	"github.com/corruptmemory/ringer/internal/isolate"
 )
 
 // landlockExecCmd is the hidden trampoline behind the Landlock isolator:
@@ -25,6 +27,14 @@ type landlockExecCmd struct {
 }
 
 func (c *landlockExecCmd) Execute(args []string) error {
+	// Defense in depth: BestEffort().RestrictPaths returns nil even when
+	// Landlock is entirely absent (go-landlock silently no-ops on an
+	// unsupporting kernel). Exec'ing unconfined would be a silent isolation
+	// downgrade — the one thing the fallback chain must never do. Refuse
+	// outright if the kernel can't enforce, regardless of how we were reached.
+	if _, ok := isolate.LandlockABI(); !ok {
+		return fmt.Errorf("landlock-exec: kernel does not support Landlock; refusing to exec unconfined")
+	}
 	rules := make([]landlock.Rule, 0, len(c.RO)+len(c.RW))
 	for _, p := range c.RO {
 		rules = append(rules, landlock.RODirs(p))
