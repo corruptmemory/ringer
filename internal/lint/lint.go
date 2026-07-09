@@ -102,8 +102,8 @@ func Check(m *manifest.Manifest) []Finding {
 		pathsToTasks := map[string][]string{}
 		for _, t := range m.Tasks {
 			for _, p := range t.ExpectFiles {
-				if expanded := config.ExpandUser(p); filepath.IsAbs(expanded) {
-					pathsToTasks[expanded] = append(pathsToTasks[expanded], t.Key)
+				if filepath.IsAbs(config.ExpandUser(p)) {
+					pathsToTasks[p] = append(pathsToTasks[p], t.Key)
 				}
 			}
 		}

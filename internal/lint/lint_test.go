@@ -270,6 +270,44 @@ func TestWriteCollisionRule(t *testing.T) {
 	if got := rulesOf(Check(m), RuleWriteCollision); len(got) != 0 {
 		t.Fatalf("worktrees mode must skip write-collision, got %+v", got)
 	}
+
+	// Python parity: collision detection keys on literal paths, not expanded
+	// forms. Two tasks both listing ~/shared/tilde.md should collide with the
+	// literal ~ in the message; a task listing ~/... plus another listing a
+	// DIFFERENT literal spelling (e.g. /home/user/...) should not cross-collide.
+	m2 := &manifest.Manifest{
+		RunName: "r", Workdir: "/w",
+		Tasks: []manifest.Task{
+			{Key: "t1", Spec: longSpec, Check: "test -f ~/shared/tilde.md", ExpectFiles: []string{"~/shared/tilde.md"}},
+			{Key: "t2", Spec: longSpec, Check: "test -f ~/shared/tilde.md", ExpectFiles: []string{"~/shared/tilde.md"}},
+		},
+	}
+	got = rulesOf(Check(m2), RuleWriteCollision)
+	if len(got) != 1 {
+		t.Fatalf("tilde paths: findings = %+v, want exactly one collision", got)
+	}
+	msg = got[0].Message
+	if !strings.Contains(msg, "~/shared/tilde.md") {
+		t.Fatalf("message %q must contain literal ~/shared/tilde.md (not expanded path)", msg)
+	}
+	if !strings.Contains(msg, "t1, t2") {
+		t.Fatalf("message %q must name both tasks", msg)
+	}
+
+	// Different literal spellings should NOT collide (Python parity):
+	// ~/... and /home/user/... are different keys even if they resolve to
+	// the same absolute path.
+	m3 := &manifest.Manifest{
+		RunName: "r", Workdir: "/w",
+		Tasks: []manifest.Task{
+			{Key: "tilde", Spec: longSpec, Check: "test -f ~/shared/out.md", ExpectFiles: []string{"~/shared/out.md"}},
+			{Key: "absolute", Spec: longSpec, Check: "test -f /home/user/shared/out.md", ExpectFiles: []string{"/home/user/shared/out.md"}},
+		},
+	}
+	got = rulesOf(Check(m3), RuleWriteCollision)
+	if len(got) != 0 {
+		t.Fatalf("different literal spellings should not cross-collide, got %+v", got)
+	}
 }
 
 func TestWorktreeDeliverableRule(t *testing.T) {
