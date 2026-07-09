@@ -26,6 +26,17 @@ type runCmd struct {
 }
 
 func (c *runCmd) Execute(args []string) error {
+	return runManifestFile(c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun)
+}
+
+// runManifestFile is the shared execution path behind both `run` and `demo`:
+// load config/logger, load+validate the manifest at manifestPath, lint,
+// resolve identity, inject the built-in mock engine, preflight, then either
+// print the dry-run plan or actually run it and print the results table.
+// `demo` reaches this exact function (not a reimplementation) by writing its
+// generated manifest to a temp path and calling this with that path — this
+// is the "same path run uses" the Task 11 brief calls for.
+func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag string, dryRun bool) error {
 	cfgPath := opts.Config
 	if cfgPath == "" {
 		cfgPath = config.DefaultPath()
@@ -45,19 +56,18 @@ func (c *runCmd) Execute(args []string) error {
 		return err
 	}
 
-	manifestPath := c.Args.Manifest
 	m, err := manifest.FromPath(manifestPath)
 	if err != nil {
 		return err
 	}
-	if c.MaxParallel > 0 {
-		m.MaxParallel = c.MaxParallel
+	if maxParallelOverride > 0 {
+		m.MaxParallel = maxParallelOverride
 	}
 
 	// Lint findings are advisory only — print and keep going, never block a run.
 	printLintFindings(lint.Check(m))
 
-	identity := config.ResolveIdentity(c.Identity, cfg, filepath.Dir(manifestPath))
+	identity := config.ResolveIdentity(identityFlag, cfg, filepath.Dir(manifestPath))
 
 	// Engines: config engines plus a built-in mock pointing at this binary.
 	self, _ := os.Executable()
@@ -83,7 +93,7 @@ func (c *runCmd) Execute(args []string) error {
 		return err
 	}
 
-	if c.DryRun {
+	if dryRun {
 		fmt.Fprintf(os.Stdout, "run %q: %d task(s), max_parallel=%d, identity=%s\n",
 			m.RunName, len(m.Tasks), m.MaxParallel, identity)
 		for _, t := range m.Tasks {
