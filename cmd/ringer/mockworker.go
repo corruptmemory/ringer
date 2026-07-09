@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"os"
 
 	"github.com/corruptmemory/ringer/internal/mockworker"
@@ -27,5 +26,4 @@ func init() {
 		"Deterministic offline worker (CI/testing)",
 		"Parses MOCK_FILE/MOCK_END/MOCK_FAIL spec grammar and writes files into the cwd.",
 		&mockWorkerCommand{})
-	_ = fmt.Sprint // keep import if unused after edits
 }
