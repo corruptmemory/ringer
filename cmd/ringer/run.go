@@ -1,0 +1,148 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+
+	"github.com/corruptmemory/ringer/internal/config"
+	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/lint"
+	"github.com/corruptmemory/ringer/internal/logging"
+	"github.com/corruptmemory/ringer/internal/manifest"
+	"github.com/corruptmemory/ringer/internal/runner"
+	"github.com/corruptmemory/ringer/internal/store"
+)
+
+type runCmd struct {
+	MaxParallel int    `long:"max-parallel" description:"override manifest max_parallel"`
+	Identity    string `long:"identity" description:"identity for eval rows (default: resolved from config/env/hostname)"`
+	DryRun      bool   `long:"dry-run" description:"print the plan and exit"`
+	NoDashboard bool   `long:"no-dashboard" description:"accepted; always headless in Plan 2 (no HUD yet)"`
+	Args        struct {
+		Manifest string `positional-arg-name:"MANIFEST" description:"path to the manifest JSON"`
+	} `positional-args:"yes" required:"yes"`
+}
+
+func (c *runCmd) Execute(args []string) error {
+	return runManifestFile(c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun)
+}
+
+// runManifestFile is the shared execution path behind both `run` and `demo`:
+// load config/logger, load+validate the manifest at manifestPath, lint,
+// resolve identity, inject the built-in mock engine, preflight, then either
+// print the dry-run plan or actually run it and print the results table.
+// `demo` reaches this exact function (not a reimplementation) by writing its
+// generated manifest to a temp path and calling this with that path — this
+// is the "same path run uses" the Task 11 brief calls for.
+func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag string, dryRun bool) error {
+	cfgPath := opts.Config
+	if cfgPath == "" {
+		cfgPath = config.DefaultPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+
+	// Build the logger — fail loud here, at the CLI boundary, not in a library init().
+	lvl, err := resolveLogLevel(opts.LogLevel, cfg)
+	if err != nil {
+		return fmt.Errorf("--log-level: %w", err)
+	}
+	lg, err := logging.New(logging.Config{Level: lvl, Format: cfg.Logging.Format})
+	if err != nil {
+		return err
+	}
+
+	m, err := manifest.FromPath(manifestPath)
+	if err != nil {
+		return err
+	}
+	if maxParallelOverride > 0 {
+		m.MaxParallel = maxParallelOverride
+	}
+
+	// Lint findings are advisory only — print and keep going, never block a run.
+	printLintFindings(lint.Check(m))
+
+	identity := config.ResolveIdentity(identityFlag, cfg, filepath.Dir(manifestPath))
+
+	// Engines: config engines plus a built-in mock pointing at this binary.
+	self, _ := os.Executable()
+	engines := map[string]config.EngineConfig{}
+	for k, v := range cfg.Engines {
+		engines[k] = v
+	}
+	if _, ok := engines["mock"]; !ok {
+		engines["mock"] = config.EngineConfig{
+			Bin: self, ArgsTemplate: []string{"mock-worker", "{spec}"}, Isolation: "none",
+		}
+	}
+
+	used := map[string]bool{}
+	for _, t := range m.Tasks {
+		name := t.Engine
+		if name == "" {
+			name = "codex"
+		}
+		used[name] = true
+	}
+	if err := engine.Preflight(engines, used); err != nil {
+		return err
+	}
+
+	if dryRun {
+		fmt.Fprintf(os.Stdout, "run %q: %d task(s), max_parallel=%d, identity=%s\n",
+			m.RunName, len(m.Tasks), m.MaxParallel, identity)
+		for _, t := range m.Tasks {
+			fmt.Fprintf(os.Stdout, "  - %s [%s]\n", t.Key, t.Engine)
+		}
+		return nil
+	}
+
+	var st *store.Store
+	if s, err := store.Open(cfg.DBPath()); err != nil {
+		lg.Warnf("eval store unavailable (%v); continuing without eval logging", err)
+	} else {
+		st = s
+		defer st.Close()
+	}
+
+	res, err := runner.Run(context.Background(), runner.Options{
+		Manifest: m, Engines: engines, StateDir: cfg.StateDirPath(),
+		Identity: identity, Store: st, Stdout: os.Stdout, Logger: lg,
+		MaxParallel: m.MaxParallel,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "\n%-20s %-8s %-9s %s\n", "TASK", "VERDICT", "ATTEMPTS", "TOKENS")
+	for _, r := range res.Results {
+		fmt.Fprintf(os.Stdout, "%-20s %-8s %-9d %s\n", r.Key, r.Verdict, r.Attempts, formatTokens(r.Tokens))
+	}
+	if !res.AllPassed {
+		return fmt.Errorf("run %s: one or more tasks failed", res.RunID)
+	}
+	return nil
+}
+
+// formatTokens renders a TaskResult's token count for the verdict table.
+// runner.TaskResult.Tokens uses -1 as its "unknown" sentinel (no token_regex
+// configured, the regex didn't compile, or nothing matched) — printing that
+// literal -1 would look like a real, if odd, token count rather than "we
+// don't know." Blank it out instead, matching Python's behavior of leaving
+// the column empty when tokens are unknown.
+func formatTokens(tokens int64) string {
+	if tokens < 0 {
+		return "-"
+	}
+	return strconv.FormatInt(tokens, 10)
+}
+
+func init() {
+	parser.AddCommand("run", "Run a manifest", "Execute a manifest of tasks against pluggable engines.", &runCmd{})
+}

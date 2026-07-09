@@ -2,12 +2,23 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
 )
+
+// LoggingConfig mirrors logging.Config field-for-field (Level slog.Level,
+// Format string) instead of importing internal/logging, keeping config
+// dependency-light; the CLI boundary does the trivial conversion. slog.Level
+// implements encoding.TextUnmarshaler, so `level = "debug"` decodes for free.
+// Zero value == {Info, ""} == the sane default (absent section => Info/text).
+type LoggingConfig struct {
+	Level  slog.Level `toml:"level"`
+	Format string     `toml:"format"`
+}
 
 type EngineConfig struct {
 	Bin            string   `toml:"bin"`
@@ -35,6 +46,7 @@ type AppConfig struct {
 	IdentityDefault string                  `toml:"identity_default"`
 	StateDir        string                  `toml:"state_dir"` // empty -> ~/.ringer
 	AllowFullAccess bool                    `toml:"allow_full_access"`
+	Logging         LoggingConfig           `toml:"logging"`
 	Eval            EvalConfig              `toml:"eval"`
 	Artifact        ArtifactConfig          `toml:"artifact"`
 	Engines         map[string]EngineConfig `toml:"engines"`
@@ -102,6 +114,11 @@ func Load(path string) (*AppConfig, error) {
 		default:
 			return nil, fmt.Errorf("config %s: engines.%s.isolation must be \"none\" or \"jail\", got %q", path, name, e.Isolation)
 		}
+	}
+	switch c.Logging.Format {
+	case "", "text", "json":
+	default:
+		return nil, fmt.Errorf("config %s: logging.format must be \"text\" or \"json\", got %q", path, c.Logging.Format)
 	}
 	return &c, nil
 }

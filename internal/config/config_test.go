@@ -95,3 +95,21 @@ func TestInvalidIsolationRejected(t *testing.T) {
 		t.Fatalf("want isolation validation error, got %v", err)
 	}
 }
+
+func TestLoadAcceptsLoggingSection(t *testing.T) {
+	p := writeConfig(t, "[logging]\nlevel = \"debug\"\nformat = \"json\"\n")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.Logging.Format != "json" {
+		t.Errorf("logging.format = %q, want \"json\"", c.Logging.Format)
+	}
+}
+
+func TestInvalidLoggingFormatRejected(t *testing.T) {
+	_, err := Load(writeConfig(t, "[logging]\nformat = \"xml\"\n"))
+	if err == nil || !strings.Contains(err.Error(), "logging.format") {
+		t.Fatalf("want logging.format validation error, got %v", err)
+	}
+}
