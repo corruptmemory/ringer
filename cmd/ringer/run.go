@@ -117,25 +117,9 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 	// the unconfined lane and must not trigger selection (or a refusal)
 	// on its own. Selection failures are refusals — precise, actionable,
 	// before any task starts.
-	var iso isolate.Isolator
-	for _, t := range m.Tasks {
-		if t.FullAccess {
-			continue
-		}
-		e, rerr := engine.Resolve(engines, t.Engine)
-		if rerr != nil || e.Isolation != "jail" {
-			continue
-		}
-		self, serr := os.Executable()
-		if serr != nil {
-			return fmt.Errorf("resolve own binary for isolation trampoline: %w", serr)
-		}
-		iso, err = isolate.Select(lg, m.Workdir, self)
-		if err != nil {
-			return err
-		}
-		lg.Infof("isolation backend: %s", iso.Name())
-		break
+	iso, err := selectIsolator(m, engines, lg)
+	if err != nil {
+		return err
 	}
 
 	if dryRun {
@@ -180,6 +164,35 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 		return fmt.Errorf("run %s: one or more tasks failed", res.RunID)
 	}
 	return nil
+}
+
+// selectIsolator returns the isolation backend for a run, or nil when no
+// task needs one. A task with full_access takes the unconfined lane and
+// never triggers selection. Selection failures (refusals) propagate.
+func selectIsolator(m *manifest.Manifest, engines map[string]config.EngineConfig, lg logging.Logger) (isolate.Isolator, error) {
+	needsJail := false
+	for _, t := range m.Tasks {
+		if t.FullAccess {
+			continue
+		}
+		if e, err := engine.Resolve(engines, t.Engine); err == nil && e.Isolation == "jail" {
+			needsJail = true
+			break
+		}
+	}
+	if !needsJail {
+		return nil, nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve own binary for isolation trampoline: %w", err)
+	}
+	iso, err := isolate.Select(lg, m.Workdir, self)
+	if err != nil {
+		return nil, err
+	}
+	lg.Infof("isolation backend: %s", iso.Name())
+	return iso, nil
 }
 
 // formatTokens renders a TaskResult's token count for the verdict table.
