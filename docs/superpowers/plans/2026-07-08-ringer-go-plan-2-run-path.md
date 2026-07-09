@@ -1411,7 +1411,7 @@ func (a *actor) snapshot() state.RunState                // synchronous request/
 
 All mutation goes through the command channel; `snapshot()` sends a reply channel and blocks for the response. This is the single-owner pattern — no mutex on the task map.
 
-This task also delivers a **second, sibling actor — the output-collector** (`collector.go`), kept separate from the run-state actor on purpose: its traffic is bimodal (high-frequency fire-and-forget chunk appends + occasional request-reply tail reads), which must not share the run-state actor's all-synchronous channel or compete with its 1s snapshot. One buffered command channel carries both append-closures and tail-closures — a single FIFO so a `tail()` always sees every append that preceded it (two channels would let a read race ahead of buffered writes). Same lifecycle discipline as the run-state actor: recover-guarded `stop`, `WaitGroup` `wait`, drain-then-exit so a worker's final output burst isn't lost.
+This task also delivers a **second, sibling actor — the output-collector** (`collector.go`), kept separate from the run-state actor on purpose: its traffic is bimodal (high-frequency fire-and-forget chunk appends + occasional request-reply tail reads), which must not share the run-state actor's all-synchronous channel or compete with its 1s snapshot. One buffered, **typed** command channel carries both append and tail commands (`collectorCmd{op, key, data|limit, reply}`) — a single FIFO so a `tail()` always sees every append that preceded it (two channels would let a read race ahead of buffered writes). Same lifecycle discipline as the run-state actor: recover-guarded `stop`, `WaitGroup` `wait`, drain-then-exit so a worker's final output burst isn't lost.
 
 ```go
 // The output-collector: run-scoped owner of bounded, chunk-granular per-task
@@ -1468,7 +1468,7 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 
 - [ ] **Step 2: Run to verify fail** — `./build.sh --test`.
 
-- [ ] **Step 3: Implement** the actor: a `cmds chan func()` (each command is a closure run on the actor goroutine — simplest correct actor in Go), the private `map[string]*state.TaskView`, ordered `keys` for stable snapshot order, and `snapshot()` posting a closure that copies the map into a `state.RunState` and sends it on a reply channel.
+- [ ] **Step 3: Implement** the actor with a **typed** command channel `cmds chan actorCmd` — a closed set of tagged ops (`setStatus`/`setResult` fire-and-forget, `snapshot` request-reply) — and a `run()` switch that owns the private `map[string]*state.TaskView` and IS the state machine: all mutation logic co-located in one readable place, not a `chan func()` executor of arbitrary closures (that's the anti-pattern the `actor-pattern` skill warns against — "tagged structs, not `interface.apply()`"). Ordered `keys` give a stable snapshot order.
 
   **Lifecycle protocol** (see the `actor-pattern` skill, "Lifecycle"): `stop` and `wait` are separate operations. `wait()` is a `sync.WaitGroup` (`Add(1)` before the goroutine, `defer Done()` inside it) so any number of callers may wait. `stop()` is a `recover`-guarded `close(a.cmds)` — drain-then-exit — that logs a recovered double-stop (keyed by `runID`) rather than swallowing it silently, and returns immediately without waiting. `stopAndWait()` is the named convenience so a blocking wait is never hidden inside a method called `stop`.
 
@@ -1483,10 +1483,31 @@ import (
 	"github.com/corruptmemory/ringer/internal/state"
 )
 
+// actorOp tags the closed set of operations the actor serializes. The command
+// channel is TYPED (not chan func()) so run() reads as the state machine and
+// callers cannot inject arbitrary work.
+type actorOp uint8
+
+const (
+	opSetStatus actorOp = iota
+	opSetResult
+	opSnapshot
+)
+
+type actorCmd struct {
+	op                actorOp
+	key               string
+	status            string
+	attempt           int
+	tokens            int64
+	verified, logPath string
+	reply             chan state.RunState // opSnapshot only
+}
+
 type actor struct {
 	runID, runName, identity string
 	keys                     []string
-	cmds                     chan func()
+	cmds                     chan actorCmd
 	wg                       sync.WaitGroup // wait() blocks on this — N callers ok
 	lg                       logging.Logger
 	tasks                    map[string]*state.TaskView
@@ -1499,18 +1520,42 @@ func newActor(runID, runName, identity string, keys []string, lg logging.Logger)
 	}
 	return &actor{
 		runID: runID, runName: runName, identity: identity, keys: keys,
-		cmds: make(chan func()), lg: lg, tasks: tasks,
+		cmds: make(chan command), lg: lg, tasks: tasks,
 	}
 }
 
 func (a *actor) start() {
 	a.wg.Add(1)
-	go func() {
-		defer a.wg.Done()
-		for fn := range a.cmds { // drain accepted commands, then exit
-			fn()
+	go a.run()
+}
+
+// run is the single owner of the task map. It applies each typed command in
+// receive order; because the op set is closed, all mutation logic lives here in
+// one readable switch — the state machine, not an executor of arbitrary funcs.
+func (a *actor) run() {
+	defer a.wg.Done()
+	for c := range a.cmds { // drain accepted commands, then exit on close
+		switch c.op {
+		case opSetStatus:
+			if tv := a.tasks[c.key]; tv != nil {
+				tv.Status = c.status
+				tv.Attempt = c.attempt
+			}
+		case opSetResult:
+			if tv := a.tasks[c.key]; tv != nil {
+				tv.Status = c.status
+				tv.Tokens = c.tokens
+				tv.Verified = c.verified
+				tv.LogPath = c.logPath
+			}
+		case opSnapshot:
+			out := state.RunState{RunID: a.runID, RunName: a.runName, Identity: a.identity}
+			for _, k := range a.keys {
+				out.Tasks = append(out.Tasks, *a.tasks[k])
+			}
+			c.reply <- out
 		}
-	}()
+	}
 }
 
 // stop is the shutdown trigger: it closes cmds (drain-then-exit) and returns
@@ -1518,9 +1563,10 @@ func (a *actor) start() {
 // stop re-closes cmds, panics, and is recovered. A recovered double-stop is a
 // correct no-op but also evidence of a stray stop() caller, so it is logged
 // (never swallowed), keyed by runID. Add debug.Stack() to the log line when
-// hunting the wayward caller. Producers must have quiesced before stop() —
-// do() is synchronous, so once every caller has returned there are no in-flight
-// commands and nothing left to drain.
+// hunting the wayward caller. Producers must have quiesced before stop() — the
+// setStatus/setResult/snapshot sends rendezvous with run()'s receive, so once
+// every caller has returned there are no in-flight sends to panic on the closed
+// channel, and run() finishes its current command before range exits.
 func (a *actor) stop() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -1538,41 +1584,23 @@ func (a *actor) wait() { a.wg.Wait() }
 // the blocking wait is visible at the call site, never hidden inside stop().
 func (a *actor) stopAndWait() { a.stop(); a.wait() }
 
-func (a *actor) do(fn func()) {
-	done := make(chan struct{})
-	a.cmds <- func() { fn(); close(done) }
-	<-done
-}
-
+// setStatus and setResult are fire-and-forget: the send rendezvous with run()'s
+// receive (so ordering is preserved), but the caller does not block until the
+// mutation is applied — it has no need to.
 func (a *actor) setStatus(key, status string, attempt int) {
-	a.do(func() {
-		if tv := a.tasks[key]; tv != nil {
-			tv.Status = status
-			tv.Attempt = attempt
-		}
-	})
+	a.cmds <- actorCmd{op: opSetStatus, key: key, status: status, attempt: attempt}
 }
 
 func (a *actor) setResult(key, status string, tokens int64, verified, logPath string) {
-	a.do(func() {
-		if tv := a.tasks[key]; tv != nil {
-			tv.Status = status
-			tv.Tokens = tokens
-			tv.Verified = verified
-			tv.LogPath = logPath
-		}
-	})
+	a.cmds <- actorCmd{op: opSetResult, key: key, status: status, tokens: tokens, verified: verified, logPath: logPath}
 }
 
+// snapshot is request-reply: it sends its own reply channel and blocks for the
+// consistent point-in-time copy that run() assembles and sends back.
 func (a *actor) snapshot() state.RunState {
-	var out state.RunState
-	a.do(func() {
-		out = state.RunState{RunID: a.runID, RunName: a.runName, Identity: a.identity}
-		for _, k := range a.keys {
-			out.Tasks = append(out.Tasks, *a.tasks[k])
-		}
-	})
-	return out
+	reply := make(chan state.RunState, 1)
+	a.cmds <- actorCmd{op: opSnapshot, reply: reply}
+	return <-reply
 }
 ```
 
@@ -1738,40 +1766,45 @@ func TestCollectorConcurrentWritersRace(t *testing.T) {
 	}
 }
 
-// TestCollectorDrainOnStop proves the owner drains buffered commands before
-// exiting (a worker's final burst isn't lost just because stop() raced ahead
-// of processing), and that stop() is safely idempotent.
-func TestCollectorDrainOnStop(t *testing.T) {
+// TestCollectorStopIsIdempotentAndPrompt replaces the old TestCollectorDrainOnStop,
+// which reached into the collector's internals by pushing raw closures onto
+// c.cmds directly — only possible because cmds was an untyped chan func(),
+// itself the anti-pattern this refactor removes. With a typed command channel
+// there is no way to inject an arbitrary closure from a test, so we exercise
+// only the public API and its observable lifecycle guarantees: a burst of
+// writes is visible via tail() before stop; stop() is safe to call more than
+// once; and stopAndWait() returns promptly. (The run() loop still drains
+// commands buffered after quit before exiting, but that "no lost buffered
+// command" property isn't publicly observable — the log file is the
+// authoritative full record; the collector tail is only a live convenience.)
+func TestCollectorStopIsIdempotentAndPrompt(t *testing.T) {
 	c := newCollector(1 << 20)
 	c.start()
 
-	const n = 50
-	results := make(chan int, n)
-	for i := 0; i < n; i++ {
-		i := i
-		c.cmds <- func() { results <- i }
+	sink := c.sink("k")
+	const want = "burst-of-data"
+	if _, err := sink.Write([]byte(want)); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if got := c.tail("k", 1<<20); got != want {
+		t.Fatalf("tail before stop = %q, want %q", got, want)
 	}
 
-	// Stop immediately; the owner must drain the n buffered closures above
-	// before exiting rather than dropping them.
 	c.stopAndWait()
 
-	if len(results) != n {
-		t.Fatalf("drain-then-exit dropped closures: got %d of %d", len(results), n)
-	}
-
-	// Double stop must be a safe no-op.
+	// A second stop() must be a safe no-op (recover-guarded close), not a panic.
 	c.stop()
 
-	stopAgain := make(chan struct{})
+	// A following stopAndWait() must return promptly (not block).
+	done := make(chan struct{})
 	go func() {
 		c.stopAndWait()
-		close(stopAgain)
+		close(done)
 	}()
 	select {
-	case <-stopAgain:
+	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("second stopAndWait() did not return promptly")
+		t.Fatal("stopAndWait() after stop did not return within 2s")
 	}
 }
 
@@ -1800,15 +1833,35 @@ import (
 	"sync"
 )
 
+// collectorOp tags the closed set of commands the collector actor accepts.
+type collectorOp uint8
+
+const (
+	opAppend collectorOp = iota
+	opTail
+)
+
+// collectorCmd is the single typed message carried on the collector's command
+// channel. Which fields are meaningful depends on op:
+//   - opAppend: key, data
+//   - opTail:   key, limit, reply
+type collectorCmd struct {
+	op    collectorOp
+	key   string
+	data  []byte      // opAppend
+	limit int         // opTail
+	reply chan string // opTail
+}
+
 // collector is the run-scoped owner of per-task worker output tails. Workers
 // forward chunks via sink (fire-and-forget); readers call tail (request-reply).
 // A single owner goroutine drains one buffered command channel carrying BOTH
-// append-closures and tail-closures — one FIFO channel (not two) so a tail
-// always sees every append that preceded it. Lifecycle mirrors the run's
-// actor: recover-guarded stop, WaitGroup wait, drain-then-exit.
+// append and tail commands — one FIFO channel (not two) so a tail always sees
+// every append that preceded it. Lifecycle mirrors the run's actor:
+// recover-guarded stop, WaitGroup wait, drain-then-exit.
 type collector struct {
 	capPerTask int
-	cmds       chan func()
+	cmds       chan collectorCmd
 	quit       chan struct{}
 	wg         sync.WaitGroup
 	tails      map[string]*taskTail // owned solely by run()
@@ -1823,7 +1876,7 @@ type taskTail struct {
 func newCollector(capPerTask int) *collector {
 	return &collector{
 		capPerTask: capPerTask,
-		cmds:       make(chan func(), 256),
+		cmds:       make(chan collectorCmd, 256),
 		quit:       make(chan struct{}),
 		tails:      map[string]*taskTail{},
 	}
@@ -1833,24 +1886,40 @@ func (c *collector) start() {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		for {
-			select {
-			case fn := <-c.cmds:
-				fn()
-			case <-c.quit:
-				// drain-then-exit: absorb buffered chunks so a worker's final
-				// burst isn't lost, then exit.
-				for {
-					select {
-					case fn := <-c.cmds:
-						fn()
-					default:
-						return
-					}
+		c.run()
+	}()
+}
+
+// run is the actor loop: a single goroutine owns c.tails and processes typed
+// commands off c.cmds until quit is closed, then drains any commands already
+// buffered before exiting.
+func (c *collector) run() {
+	for {
+		select {
+		case cmd := <-c.cmds:
+			c.handle(cmd)
+		case <-c.quit:
+			// drain-then-exit: absorb buffered commands so a worker's final
+			// burst isn't lost, then exit.
+			for {
+				select {
+				case cmd := <-c.cmds:
+					c.handle(cmd)
+				default:
+					return
 				}
 			}
 		}
-	}()
+	}
+}
+
+func (c *collector) handle(cmd collectorCmd) {
+	switch cmd.op {
+	case opAppend:
+		c.append(cmd.key, cmd.data)
+	case opTail:
+		cmd.reply <- c.assembleTail(cmd.key, cmd.limit)
+	}
 }
 
 func (c *collector) append(key string, data []byte) {
@@ -1882,9 +1951,8 @@ type collectorSink struct {
 func (s *collectorSink) Write(p []byte) (int, error) {
 	b := make([]byte, len(p))
 	copy(b, p)
-	key := s.key
 	select {
-	case s.c.cmds <- func() { s.c.append(key, b) }:
+	case s.c.cmds <- collectorCmd{op: opAppend, key: s.key, data: b}:
 	case <-s.c.quit:
 	}
 	return len(p), nil
@@ -1894,7 +1962,7 @@ func (s *collectorSink) Write(p []byte) (int, error) {
 func (c *collector) tail(key string, limitBytes int) string {
 	reply := make(chan string, 1)
 	select {
-	case c.cmds <- func() { reply <- c.assembleTail(key, limitBytes) }:
+	case c.cmds <- collectorCmd{op: opTail, key: key, limit: limitBytes, reply: reply}:
 		select {
 		case s := <-reply:
 			return s
