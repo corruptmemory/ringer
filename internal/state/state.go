@@ -70,6 +70,12 @@ func WriteRunState(stateDir string, s RunState) error {
 func activeRunsPath(stateDir string) string { return filepath.Join(stateDir, "active-runs.json") }
 
 func pidAlive(pid int) bool {
+	if pid <= 0 {
+		// kill(0, 0) probes the caller's own process group and kill(-1, 0)
+		// probes every process we may signal — both "exist", so a zero or
+		// negative pid from a corrupt entry would otherwise never prune.
+		return false
+	}
 	err := syscall.Kill(pid, 0)
 	if err == nil {
 		return true

@@ -11,6 +11,7 @@ import (
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/isolate"
 	"github.com/corruptmemory/ringer/internal/logging"
 	"github.com/corruptmemory/ringer/internal/manifest"
 	"github.com/corruptmemory/ringer/internal/state"
@@ -19,6 +20,22 @@ import (
 )
 
 const defaultTimeoutS = 900
+
+// failureContextMax caps the check output appended to a retry spec, in
+// bytes; mirrors ringer.py build_failure_context's 6000-char cap
+// (ringer.py:7671). The spec travels as ONE argv element, and Linux caps a
+// single argument at MAX_ARG_STRLEN (~128KiB) — an uncapped check output
+// would make the retry spawn fail with E2BIG.
+const failureContextMax = 6000
+
+// capTail returns at most max trailing bytes of s — the most recent output
+// is the actionable part of a failure log.
+func capTail(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[len(s)-max:]
+}
 
 // Options configures a Run. Store may be nil to skip eval logging; Logger nil
 // falls back to logging.Default(); MaxParallel <= 0 means "unbounded" (one
@@ -30,8 +47,9 @@ type Options struct {
 	Identity    string
 	Store       *store.Store // may be nil (skip eval logging)
 	Stdout      io.Writer
-	Logger      logging.Logger // nil -> logging.Default()
-	MaxParallel int            // 0 -> len(tasks)
+	Logger      logging.Logger   // nil -> logging.Default()
+	MaxParallel int              // 0 -> len(tasks)
+	Isolator    isolate.Isolator // required iff any task's engine sets isolation="jail"
 }
 
 // TaskResult is one task's final outcome in a RunResult.
@@ -58,8 +76,8 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	if lg == nil {
 		lg = logging.Default()
 	}
-	if m.Worktrees {
-		return RunResult{}, fmt.Errorf("worktrees mode lands in Plan 3")
+	if m.Worktrees && m.Repo == "" {
+		return RunResult{}, fmt.Errorf("worktrees mode requires repo (manifest validation should have caught this)")
 	}
 
 	keys := make([]string, len(m.Tasks))
@@ -174,6 +192,13 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 			Key: tv.Key, Verdict: verdict, Attempts: tv.Attempt, Tokens: tv.Tokens,
 		})
 	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// Teardown already ran: final state flushed (done:true), actor and
+		// collector stopping via defers, active-runs unregistering via
+		// defer. Surface the interruption so the CLI exits non-zero.
+		return res, fmt.Errorf("run %s interrupted: %w", runID, ctxErr)
+	}
 	return res, nil
 }
 
@@ -214,21 +239,32 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		a.setResult(task.Key, "failed", -1, task.Verified, "")
 		return
 	}
-	if engConf.Isolation == "jail" {
-		lg.Errorf("task %s: jail isolation lands in Plan 3", task.Key)
-		a.setResult(task.Key, "failed", -1, task.Verified, "")
-		return
+	var iso isolate.Isolator
+	if engConf.Isolation == "jail" && !task.FullAccess {
+		// Spec §6: full_access: true = no jail (unchanged semantics) — the
+		// task explicitly asked for the unconfined lane.
+		iso = opts.Isolator
+		if iso == nil {
+			lg.Errorf("task %s: isolation=\"jail\" but no isolator was selected (CLI preflight bug)", task.Key)
+			a.setResult(task.Key, "failed", -1, task.Verified, "")
+			return
+		}
 	}
 
 	taskDir := filepath.Join(opts.Manifest.Workdir, task.Key)
-	if err := os.MkdirAll(taskDir, 0o755); err != nil {
-		lg.Errorf("task %s: mkdir %s: %v", task.Key, taskDir, err)
+	if err := prepareTaskDir(opts.Manifest, taskDir); err != nil {
+		lg.Errorf("task %s: prepare taskdir: %v", task.Key, err)
 		a.setResult(task.Key, "failed", -1, task.Verified, "")
 		return
 	}
 	logsDir := filepath.Join(opts.Manifest.Workdir, "logs")
 	_ = os.MkdirAll(logsDir, 0o755)
 	logPath := filepath.Join(logsDir, task.Key+".worker.log")
+	// Append-mode log (ringer.py:7107): clear once per task so a rerun in
+	// the same workdir starts fresh, then both attempts accumulate.
+	if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+		lg.Warnf("task %s: remove stale worker log: %v", task.Key, err)
+	}
 
 	timeoutS := task.TimeoutS
 	if timeoutS == 0 {
@@ -241,6 +277,27 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	var tokens int64 = -1
 	attempts := 0
 
+	// Cleanups collect across every attempt and run once at task end, after
+	// runWorker has returned (the jailed process has fully exited) for the
+	// LAST attempt — running one mid-task, while an earlier attempt's spec
+	// is only relevant for the retry, would still be fine, but running it
+	// before its OWN attempt's runWorker returns would race the namespace
+	// teardown against the still-running process. Deferred here guarantees
+	// "task end," which is always after every attempt's runWorker call has
+	// returned.
+	var cleanups []func() error
+	defer func() {
+		for _, c := range cleanups {
+			if cerr := c(); cerr != nil {
+				lg.Warnf("task %s: isolation cleanup: %v", task.Key, cerr)
+			}
+		}
+	}()
+	repoRO := ""
+	if opts.Manifest.Worktrees {
+		repoRO = opts.Manifest.Repo
+	}
+
 	for attempt := 1; attempt <= 2; attempt++ {
 		attempts = attempt
 		a.setStatus(task.Key, "running", attempt)
@@ -250,11 +307,37 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		// instead of left at its zero default.
 		attemptStart := time.Now()
 		bin, argv := engine.BuildArgv(engConf, taskDir, spec, model, task.EngineArgs, task.FullAccess)
+		var extraEnv []string
+		if iso != nil {
+			wrapped, werr := iso.Wrap(isolate.WrapSpec{
+				Key: task.Key, Bin: bin, Argv: argv, TaskDir: taskDir,
+				StateDirs: engConf.JailStateDirs, ROBinds: engConf.JailRoBinds,
+				RepoRO: repoRO,
+			})
+			if werr != nil {
+				lg.Errorf("task %s: isolate (%s): %v", task.Key, iso.Name(), werr)
+				verdict = "ERROR"
+				break
+			}
+			bin, argv, extraEnv = wrapped.Bin, wrapped.Argv, wrapped.Env
+			if wrapped.Cleanup != nil {
+				cleanups = append(cleanups, wrapped.Cleanup)
+			}
+		}
 		lg.Infof("task %s: attempt %d: %s", task.Key, attempt, bin)
 		w := io.MultiWriter(opts.Stdout, col.sink(task.Key)) // tee live output into the collector
-		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout)
+		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout, extraEnv)
 		if outcome.Err != nil {
 			lg.Errorf("task %s: spawn error: %v", task.Key, outcome.Err)
+		}
+		if outcome.Canceled || ctx.Err() != nil {
+			// User interrupt: no verify, no eval row (nothing meaningful
+			// ran to completion), no retry — mirror Python, where Ctrl-C
+			// aborts before _log_attempt. The actor still records the
+			// final status below so the last state flush is truthful.
+			lg.Warnf("task %s: interrupted", task.Key)
+			verdict = "ERROR"
+			break
 		}
 		tokens = engine.ParseTokens(engConf.TokenRegex, col.tail(task.Key, 64<<10)) // scrape the post-exit tail
 
@@ -288,9 +371,13 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		}
 		if attempt == 1 {
 			// Inject failure context into the spec for the retry.
-			spec = task.Spec + "\n\n--- Previous attempt failed. Check output:\n" + vres.Output
+			spec = task.Spec + "\n\n--- Previous attempt failed. Check output:\n" + capTail(vres.Output, failureContextMax)
 			lg.Warnf("task %s: attempt 1 %s; retrying", task.Key, verdict)
 		}
+	}
+
+	if verdict == "PASS" {
+		cleanupWorktreeOnPass(opts.Manifest, lg, task.Key, taskDir, logsDir)
 	}
 
 	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath)

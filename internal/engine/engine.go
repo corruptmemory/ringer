@@ -64,10 +64,6 @@ func Preflight(engines map[string]config.EngineConfig, used map[string]bool) err
 			errs = append(errs, err)
 			continue
 		}
-		if e.Isolation == "jail" {
-			errs = append(errs, fmt.Errorf("engine %q uses isolation=\"jail\", which lands in Plan 3; use \"none\" for now", name))
-			continue
-		}
 		if _, err := exec.LookPath(e.Bin); err != nil {
 			errs = append(errs, fmt.Errorf("engine %q: binary %q not found on PATH", name, e.Bin))
 		}

@@ -141,6 +141,19 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 # full_access_args = ["--no-sandbox"]
 # token_regex = '"tokens":\{"total":([0-9]+)'
 
+# Linux rootless isolation (spec §6). isolation = "none" (default) | "jail".
+# With "jail" the engine runs inside a per-task user-namespace chroot:
+# read-only host toolchain, taskdir read-write, tmpfs /tmp; if user
+# namespaces are unavailable the run falls back to Landlock path rules,
+# and refuses to run when neither is available.
+#
+# [engines.opencode]
+# bin = "/home/you/.opencode/bin/opencode"
+# args_template = ["run", ...]
+# isolation = "jail"
+# jail_state_dirs = ["~/.config/opencode", "~/.local/share/opencode"]  # read-write in the sandbox
+# jail_ro_binds = ["~/.opencode"]  # read-only in the sandbox (engine installs outside /usr etc.)
+
 [artifact]
 # Zero-LLM, self-contained HTML artifacts rendered directly from state — no model calls, no
 # network. Three files per config, all pure stdlib templates:

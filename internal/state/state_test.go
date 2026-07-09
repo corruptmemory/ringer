@@ -2,9 +2,11 @@ package state
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -150,4 +152,32 @@ func readRawFile(t *testing.T, dir string) map[string]ActiveRun {
 		t.Fatalf("unmarshaling active-runs.json: %v", err)
 	}
 	return raw
+}
+
+func TestPruneDropsNonPositivePIDs(t *testing.T) {
+	stateDir := t.TempDir()
+	// Register a run, then corrupt its PID to 0 on disk — the shared file is
+	// written by two eras of code, so defensive reading is part of the contract.
+	if err := RegisterActiveRun(stateDir, "run-zero", "id", "name", "/wd", os.Getpid(), "2026-07-09T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(stateDir, "active-runs.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corrupted := strings.Replace(string(data), fmt.Sprintf(`"pid": %d`, os.Getpid()), `"pid": 0`, 1)
+	if corrupted == string(data) {
+		t.Fatal("test setup: pid substitution did not take")
+	}
+	if err := os.WriteFile(path, []byte(corrupted), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runs, err := ReadActiveRuns(stateDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := runs["run-zero"]; ok {
+		t.Fatal("pid=0 entry survived pruning; kill(0,0) probes our own process group, not a process")
+	}
 }

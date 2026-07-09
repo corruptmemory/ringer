@@ -13,6 +13,7 @@ import (
 type WorkerOutcome struct {
 	ExitCode int
 	TimedOut bool
+	Canceled bool // parent context canceled (user interrupt) — distinct from a per-attempt timeout
 	Err      error
 }
 
@@ -25,19 +26,25 @@ var termGrace = 5 * time.Second
 // runWorker executes bin with argv in taskDir. Stdin is closed (backed by
 // /dev/null); stdout and stderr are merged and teed to a log file at
 // logPath and to the caller-supplied writer w (the caller composes w, e.g.
-// via io.MultiWriter, to also forward output to a collector sink). The
-// process runs in its own process group (Setpgid) so that on timeout the
-// whole group can be signaled: SIGTERM first, then SIGKILL after a 5s grace
-// period if it hasn't exited. cmd.Wait() joins os/exec's internal copy
-// goroutines, so once it returns all writes to w have completed.
-func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath string, w io.Writer, timeout time.Duration) WorkerOutcome {
+// via io.MultiWriter, to also forward output to a collector sink). The log
+// file is opened in APPEND mode so a retry accumulates onto the same file
+// (ringer.py parity: unlink once per task, append per attempt) — the caller
+// owns removing a stale log before the first attempt. extraEnv entries
+// (KEY=VALUE) are appended to the inherited environment; nil means inherit
+// unchanged. The process runs in its own process group (Setpgid) so that on
+// timeout or cancellation the whole group can be signaled: SIGTERM first,
+// then SIGKILL after a 5s grace period if it hasn't exited. Cancellation of
+// the parent ctx is reported as Canceled (not TimedOut). cmd.Wait() joins
+// os/exec's internal copy goroutines, so once it returns all writes to w
+// have completed.
+func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath string, w io.Writer, timeout time.Duration, extraEnv []string) WorkerOutcome {
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
 		return WorkerOutcome{Err: err}
 	}
 	defer devNull.Close()
 
-	logFile, err := os.Create(logPath)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return WorkerOutcome{Err: err}
 	}
@@ -51,6 +58,9 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 	cmd.Stdout = mw
 	cmd.Stderr = mw
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 
 	if err := cmd.Start(); err != nil {
 		return WorkerOutcome{Err: err}
@@ -63,7 +73,7 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
 
-	var timedOut bool
+	var timedOut, canceled bool
 	var waitErr error
 	select {
 	case waitErr = <-waitDone:
@@ -78,7 +88,14 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 		select {
 		case waitErr = <-waitDone:
 		default:
-			timedOut = true
+			// Same group-kill machinery either way; the label depends on
+			// WHY timeoutCtx fired. Parent cancellation (user interrupt)
+			// wins the label when both are pending.
+			if ctx.Err() != nil {
+				canceled = true
+			} else {
+				timedOut = true
+			}
 			_ = syscall.Kill(-pgid, syscall.SIGTERM)
 			select {
 			case waitErr = <-waitDone:
@@ -89,7 +106,7 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 		}
 	}
 
-	outcome := WorkerOutcome{TimedOut: timedOut}
+	outcome := WorkerOutcome{TimedOut: timedOut, Canceled: canceled}
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			outcome.ExitCode = exitErr.ExitCode()

@@ -5,9 +5,13 @@
 package lint
 
 import (
+	"fmt"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
+	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/manifest"
 )
 
@@ -22,11 +26,14 @@ type Finding struct {
 // Rule identifiers. Stable strings so callers/tests can match on them
 // without depending on Message wording.
 const (
-	RuleCheckCannotFail    = "check-cannot-fail"
-	RuleCheckSilent        = "check-silent"
-	RuleSpecUnderspecified = "spec-underspecified"
-	RuleSpecFilePointer    = "spec-file-pointer"
-	RuleMissingExpectFiles = "missing-expect-files"
+	RuleCheckCannotFail     = "check-cannot-fail"
+	RuleCheckSilent         = "check-silent"
+	RuleSpecUnderspecified  = "spec-underspecified"
+	RuleSpecFilePointer     = "spec-file-pointer"
+	RuleMissingExpectFiles  = "missing-expect-files"
+	RuleWriteCollision      = "write-collision"
+	RuleWorktreeDeliverable = "worktree-deliverable"
+	RuleWorktreeCommit      = "worktree-commit"
 )
 
 // Check returns findings for the manifest-level "checks that can't be
@@ -73,6 +80,45 @@ func Check(m *manifest.Manifest) []Finding {
 				Message: "no expect_files; the verifier can't confirm what the task produced — " +
 					"declare the expected deliverables.",
 			})
+		}
+		if m.Worktrees && anyRelativeExpectFile(t.ExpectFiles) {
+			findings = append(findings, Finding{
+				TaskKey: t.Key,
+				Rule:    RuleWorktreeDeliverable,
+				Message: "deliverable would be deleted with the worktree; write it outside the worktree or export it in the check.",
+			})
+		}
+		if m.Worktrees && instructsGitCommit(t.Spec) {
+			findings = append(findings, Finding{
+				TaskKey: t.Key,
+				Rule:    RuleWorktreeCommit,
+				Message: "worker commits die with the worktree; have the worker leave changes uncommitted and export the diff in the check.",
+			})
+		}
+	}
+	if !m.Worktrees {
+		// Relative expect_files resolve inside each task's own directory and
+		// cannot collide; only a shared absolute path is a real collision.
+		pathsToTasks := map[string][]string{}
+		for _, t := range m.Tasks {
+			for _, p := range t.ExpectFiles {
+				if filepath.IsAbs(config.ExpandUser(p)) {
+					pathsToTasks[p] = append(pathsToTasks[p], t.Key)
+				}
+			}
+		}
+		paths := make([]string, 0, len(pathsToTasks))
+		for p := range pathsToTasks {
+			paths = append(paths, p)
+		}
+		sort.Strings(paths)
+		for _, p := range paths {
+			if keys := pathsToTasks[p]; len(keys) >= 2 {
+				findings = append(findings, Finding{
+					Rule:    RuleWriteCollision,
+					Message: fmt.Sprintf("write collision on %s: listed by %s.", p, strings.Join(keys, ", ")),
+				})
+			}
 		}
 	}
 	return findings
@@ -377,6 +423,50 @@ const (
 	errUnterminatedQuote = shellSplitError("lint: unterminated quote")
 	errTrailingBackslash = shellSplitError("lint: trailing backslash with no escaped character")
 )
+
+// anyRelativeExpectFile reports whether any declared deliverable is a
+// relative path — in worktrees mode those live inside the checkout and are
+// destroyed with it on PASS. "~"-prefixed paths count as absolute, matching
+// Python's expanduser-then-is_absolute.
+func anyRelativeExpectFile(paths []string) bool {
+	for _, p := range paths {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		if !strings.HasPrefix(p, "~") && !filepath.IsAbs(p) {
+			return true
+		}
+	}
+	return false
+}
+
+// negatedGitCommitRe matches a "do not / don't / never / no [run]" phrase
+// ENDING immediately before a "git commit" occurrence (ringer.py:785-792).
+var negatedGitCommitRe = regexp.MustCompile(
+	`(?:do\s+not|don't|never|no)[\s` + "`" + `'"()\[\]{}:;,.!?-]*(?:run[\s` + "`" + `'"()\[\]{}:;,.!?-]*)?$`)
+
+// instructsGitCommit reports whether the spec tells the worker to run
+// `git commit`, ignoring occurrences negated within the preceding 48
+// characters (ringer.py:772-782).
+func instructsGitCommit(spec string) bool {
+	lower := strings.ToLower(spec)
+	start := 0
+	for {
+		idx := strings.Index(lower[start:], "git commit")
+		if idx == -1 {
+			return false
+		}
+		idx += start
+		from := idx - 48
+		if from < 0 {
+			from = 0
+		}
+		if !negatedGitCommitRe.MatchString(lower[from:idx]) {
+			return true
+		}
+		start = idx + len("git commit")
+	}
+}
 
 // --- shell comment stripping ------------------------------------------------
 

@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
+	"syscall"
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/isolate"
 	"github.com/corruptmemory/ringer/internal/lint"
 	"github.com/corruptmemory/ringer/internal/logging"
 	"github.com/corruptmemory/ringer/internal/manifest"
@@ -27,7 +30,22 @@ type runCmd struct {
 }
 
 func (c *runCmd) Execute(args []string) error {
-	return runManifestFile(c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun)
+	ctx, stop := signalContext()
+	defer stop()
+	return runManifestFile(ctx, c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun)
+}
+
+// signalContext returns a context canceled by the first SIGINT/SIGTERM.
+// After that first signal the handler unregisters itself, so a second
+// Ctrl-C falls back to default disposition and kills the process
+// immediately — graceful teardown must never trap an impatient user.
+func signalContext() (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
 }
 
 // runManifestFile is the shared execution path behind both `run` and `demo`:
@@ -37,7 +55,7 @@ func (c *runCmd) Execute(args []string) error {
 // `demo` reaches this exact function (not a reimplementation) by writing its
 // generated manifest to a temp path and calling this with that path — this
 // is the "same path run uses" the Task 11 brief calls for.
-func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag string, dryRun bool) error {
+func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverride int, identityFlag string, dryRun bool) error {
 	cfgPath := opts.Config
 	if cfgPath == "" {
 		cfgPath = config.DefaultPath()
@@ -95,12 +113,25 @@ func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag 
 	}
 
 	if dryRun {
+		// Dry-run prints the plan and exits; it must never fail on isolation
+		// selection (a host without a backend should still be able to inspect
+		// the plan), so selection happens only on the real run path below.
 		fmt.Fprintf(os.Stdout, "run %q: %d task(s), max_parallel=%d, identity=%s\n",
 			m.RunName, len(m.Tasks), m.MaxParallel, identity)
 		for _, t := range m.Tasks {
 			fmt.Fprintf(os.Stdout, "  - %s [%s]\n", t.Key, t.Engine)
 		}
 		return nil
+	}
+
+	// Isolation backend: selected once per run, only when some task will
+	// actually jail (spec §6 preflight rule) — a full_access task takes
+	// the unconfined lane and must not trigger selection (or a refusal)
+	// on its own. Selection failures are refusals — precise, actionable,
+	// before any task starts.
+	iso, err := selectIsolator(m, engines, lg)
+	if err != nil {
+		return err
 	}
 
 	var st *store.Store
@@ -111,11 +142,19 @@ func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag 
 		defer st.Close()
 	}
 
-	res, err := runner.Run(context.Background(), runner.Options{
+	res, err := runner.Run(ctx, runner.Options{
 		Manifest: m, Engines: engines, StateDir: cfg.StateDirPath(),
 		Identity: identity, Store: st, Stdout: os.Stdout, Logger: lg,
-		MaxParallel: m.MaxParallel,
+		MaxParallel: m.MaxParallel, Isolator: iso,
 	})
+	if st != nil {
+		// Run-end WAL checkpoint (spec §7, cznic #179): without an explicit
+		// TRUNCATE checkpoint the WAL grows without bound under modernc.
+		// Non-fatal — the data is durable either way — but never silent.
+		if cerr := st.Checkpoint(); cerr != nil {
+			lg.Warnf("eval store checkpoint: %v", cerr)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -128,6 +167,35 @@ func runManifestFile(manifestPath string, maxParallelOverride int, identityFlag 
 		return fmt.Errorf("run %s: one or more tasks failed", res.RunID)
 	}
 	return nil
+}
+
+// selectIsolator returns the isolation backend for a run, or nil when no
+// task needs one. A task with full_access takes the unconfined lane and
+// never triggers selection. Selection failures (refusals) propagate.
+func selectIsolator(m *manifest.Manifest, engines map[string]config.EngineConfig, lg logging.Logger) (isolate.Isolator, error) {
+	needsJail := false
+	for _, t := range m.Tasks {
+		if t.FullAccess {
+			continue
+		}
+		if e, err := engine.Resolve(engines, t.Engine); err == nil && e.Isolation == "jail" {
+			needsJail = true
+			break
+		}
+	}
+	if !needsJail {
+		return nil, nil
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve own binary for isolation trampoline: %w", err)
+	}
+	iso, err := isolate.Select(lg, m.Workdir, self)
+	if err != nil {
+		return nil, err
+	}
+	lg.Infof("isolation backend: %s", iso.Name())
+	return iso, nil
 }
 
 // formatTokens renders a TaskResult's token count for the verdict table.

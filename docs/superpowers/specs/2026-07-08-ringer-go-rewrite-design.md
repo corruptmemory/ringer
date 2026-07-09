@@ -96,6 +96,7 @@ bin = "opencode"              # direct binary on Linux; no wrapper script
 args_template = ["run", ...]
 isolation = "jail"            # none (default) | jail
 jail_state_dirs = ["~/.config/opencode", "~/.local/share/opencode"]  # rw binds
+jail_ro_binds = ["~/.opencode"]   # ro binds — engine installs living outside the host-toolchain mounts (Plan 3 addendum 2026-07-09)
 ```
 
 - `isolation = "jail"` (Linux): per-task `UnshareJail` — read-only host toolchain (`HostMounts`: /usr /etc /bin /lib…), taskdir rw, tmpfs scratch wired as `TMPDIR`/`XDG_CACHE_HOME`, `jail_state_dirs` rw. Default-deny reads: `~/.ssh`, `~/.claude.json`, etc. do not exist inside the namespace. Network open (no netns) — matches the Seatbelt wrapper's threat model: confine an honest-but-sloppy CLI, not a malicious one.

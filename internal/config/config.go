@@ -27,8 +27,9 @@ type EngineConfig struct {
 	FullAccessArgs []string `toml:"full_access_args"`
 	TokenRegex     string   `toml:"token_regex"`
 	ModelDefault   string   `toml:"model_default"`
-	Isolation      string   `toml:"isolation"` // "", "none", "jail"
-	JailStateDirs  []string `toml:"jail_state_dirs"`
+	Isolation      string   `toml:"isolation"`       // "", "none", "jail"
+	JailStateDirs  []string `toml:"jail_state_dirs"` // rw binds/rules inside the sandbox (engine state)
+	JailRoBinds    []string `toml:"jail_ro_binds"`   // ro binds/rules (engine installs outside the host toolchain, e.g. ~/.opencode)
 }
 
 type ArtifactConfig struct {
@@ -63,7 +64,10 @@ func DefaultPath() string {
 	return filepath.Join(home, ".config", "ringer", "config.toml")
 }
 
-func expandHome(p string) string {
+// ExpandUser expands a leading "~" or "~/" to the current user's home
+// directory, mirroring Python's Path.expanduser for the paths ringer's
+// config and manifests carry. Non-tilde paths pass through unchanged.
+func ExpandUser(p string) string {
 	if p == "~" || strings.HasPrefix(p, "~/") {
 		if home, err := os.UserHomeDir(); err == nil {
 			return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/"))
@@ -74,7 +78,7 @@ func expandHome(p string) string {
 
 func (c *AppConfig) StateDirPath() string {
 	if c.StateDir != "" {
-		return expandHome(c.StateDir)
+		return ExpandUser(c.StateDir)
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -85,7 +89,7 @@ func (c *AppConfig) StateDirPath() string {
 
 func (c *AppConfig) DBPath() string {
 	if c.Eval.DBPath != "" {
-		return expandHome(c.Eval.DBPath)
+		return ExpandUser(c.Eval.DBPath)
 	}
 	return filepath.Join(c.StateDirPath(), "ringer.db")
 }

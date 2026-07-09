@@ -63,11 +63,13 @@ func TestBuildArgvFullAccessSwapsArgs(t *testing.T) {
 	}
 }
 
-func TestPreflightRejectsJail(t *testing.T) {
+// Isolation enforcement moved to Select/runner (Plan 3): a jailed engine
+// whose bin resolves on PATH must PASS preflight, same as any other engine.
+func TestPreflightAcceptsJailWithResolvableBin(t *testing.T) {
 	engines := map[string]config.EngineConfig{"j": {Bin: "sh", Isolation: "jail"}}
 	err := Preflight(engines, map[string]bool{"j": true})
-	if err == nil || !strings.Contains(err.Error(), "Plan 3") {
-		t.Fatalf("jail isolation must be rejected in Plan 2, got %v", err)
+	if err != nil {
+		t.Fatalf("jailed engine with resolvable bin must pass preflight, got %v", err)
 	}
 }
 

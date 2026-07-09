@@ -27,7 +27,9 @@ func (c *demoCmd) Execute(args []string) error {
 	fmt.Fprintf(os.Stdout, "demo manifest: %s\n", manifestPath)
 	// Delegate to the exact same execution path `run` uses — demo differs
 	// only in where the manifest came from, not in how it's run.
-	return runManifestFile(manifestPath, c.MaxParallel, c.Identity, c.DryRun)
+	ctx, stop := signalContext()
+	defer stop()
+	return runManifestFile(ctx, manifestPath, c.MaxParallel, c.Identity, c.DryRun)
 }
 
 // buildDemoManifest returns the JSON bytes of a self-contained, 3-task mock

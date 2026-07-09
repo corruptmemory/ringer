@@ -1,6 +1,7 @@
 package lint
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/corruptmemory/ringer/internal/manifest"
@@ -223,6 +224,135 @@ func TestCheck(t *testing.T) {
 			}
 			if tc.wantAbsentRule != "" && hasRule(findings, "one", tc.wantAbsentRule) {
 				t.Fatalf("expected rule %q ABSENT on task \"one\", got %+v", tc.wantAbsentRule, findings)
+			}
+		})
+	}
+}
+
+func rulesOf(findings []Finding, rule string) []Finding {
+	var out []Finding
+	for _, f := range findings {
+		if f.Rule == rule {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestWriteCollisionRule(t *testing.T) {
+	longSpec := strings.Repeat("write the thing carefully with lots of detail ", 4)
+	m := &manifest.Manifest{
+		RunName: "r", Workdir: "/w",
+		Tasks: []manifest.Task{
+			{Key: "a", Spec: longSpec, Check: "test -f /shared/out.md", ExpectFiles: []string{"/shared/out.md", "local.md"}},
+			{Key: "b", Spec: longSpec, Check: "test -f /shared/out.md", ExpectFiles: []string{"/shared/out.md"}},
+			{Key: "c", Spec: longSpec, Check: "test -f local.md", ExpectFiles: []string{"local.md"}},
+		},
+	}
+	got := rulesOf(Check(m), RuleWriteCollision)
+	if len(got) != 1 {
+		t.Fatalf("findings = %+v, want exactly one collision", got)
+	}
+	msg := got[0].Message
+	if !strings.Contains(msg, "/shared/out.md") || !strings.Contains(msg, "a, b") {
+		t.Fatalf("message %q must name the path and both tasks", msg)
+	}
+	// Relative paths (task c + the locals) never collide: they resolve
+	// inside each task's own directory.
+	if strings.Contains(msg, "local.md") {
+		t.Fatalf("relative path leaked into collision finding: %q", msg)
+	}
+
+	// Worktrees mode skips the rule entirely (upstream parity: taskdirs are
+	// whole checkouts; the heuristic doesn't apply).
+	m.Worktrees = true
+	m.Repo = "/repo"
+	if got := rulesOf(Check(m), RuleWriteCollision); len(got) != 0 {
+		t.Fatalf("worktrees mode must skip write-collision, got %+v", got)
+	}
+
+	// Python parity: collision detection keys on literal paths, not expanded
+	// forms. Two tasks both listing ~/shared/tilde.md should collide with the
+	// literal ~ in the message; a task listing ~/... plus another listing a
+	// DIFFERENT literal spelling (e.g. /home/user/...) should not cross-collide.
+	m2 := &manifest.Manifest{
+		RunName: "r", Workdir: "/w",
+		Tasks: []manifest.Task{
+			{Key: "t1", Spec: longSpec, Check: "test -f ~/shared/tilde.md", ExpectFiles: []string{"~/shared/tilde.md"}},
+			{Key: "t2", Spec: longSpec, Check: "test -f ~/shared/tilde.md", ExpectFiles: []string{"~/shared/tilde.md"}},
+		},
+	}
+	got = rulesOf(Check(m2), RuleWriteCollision)
+	if len(got) != 1 {
+		t.Fatalf("tilde paths: findings = %+v, want exactly one collision", got)
+	}
+	msg = got[0].Message
+	if !strings.Contains(msg, "~/shared/tilde.md") {
+		t.Fatalf("message %q must contain literal ~/shared/tilde.md (not expanded path)", msg)
+	}
+	if !strings.Contains(msg, "t1, t2") {
+		t.Fatalf("message %q must name both tasks", msg)
+	}
+
+	// Different literal spellings should NOT collide (Python parity):
+	// ~/... and /home/user/... are different keys even if they resolve to
+	// the same absolute path.
+	m3 := &manifest.Manifest{
+		RunName: "r", Workdir: "/w",
+		Tasks: []manifest.Task{
+			{Key: "tilde", Spec: longSpec, Check: "test -f ~/shared/out.md", ExpectFiles: []string{"~/shared/out.md"}},
+			{Key: "absolute", Spec: longSpec, Check: "test -f /home/user/shared/out.md", ExpectFiles: []string{"/home/user/shared/out.md"}},
+		},
+	}
+	got = rulesOf(Check(m3), RuleWriteCollision)
+	if len(got) != 0 {
+		t.Fatalf("different literal spellings should not cross-collide, got %+v", got)
+	}
+}
+
+func TestWorktreeDeliverableRule(t *testing.T) {
+	longSpec := strings.Repeat("write the thing carefully with lots of detail ", 4)
+	m := &manifest.Manifest{
+		RunName: "r", Workdir: "/w", Worktrees: true, Repo: "/repo",
+		Tasks: []manifest.Task{
+			{Key: "rel", Spec: longSpec, Check: "true", ExpectFiles: []string{"out/report.md"}},
+			{Key: "abs", Spec: longSpec, Check: "true", ExpectFiles: []string{"/exports/report.md"}},
+			{Key: "home", Spec: longSpec, Check: "true", ExpectFiles: []string{"~/exports/report.md"}},
+		},
+	}
+	got := rulesOf(Check(m), RuleWorktreeDeliverable)
+	if len(got) != 1 || got[0].TaskKey != "rel" {
+		t.Fatalf("findings = %+v, want exactly one for task rel", got)
+	}
+	m.Worktrees = false
+	if got := rulesOf(Check(m), RuleWorktreeDeliverable); len(got) != 0 {
+		t.Fatalf("non-worktrees mode must not fire, got %+v", got)
+	}
+}
+
+func TestWorktreeCommitRule(t *testing.T) {
+	pad := strings.Repeat("x", 80)
+	cases := []struct {
+		name string
+		spec string
+		want bool
+	}{
+		{"plain instruction", "Implement the feature, then git commit the result. " + pad, true},
+		{"uppercase", "GIT COMMIT when done. " + pad, true},
+		{"negated", "Fix the bug. Do not git commit. " + pad, false},
+		{"negated contraction", "Fix it, but don't run `git commit`. " + pad, false},
+		{"negated then instructed", "Don't git commit yet; later git commit the fix. " + pad, true},
+		{"absent", "Just write the file. " + pad, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := &manifest.Manifest{
+				RunName: "r", Workdir: "/w", Worktrees: true, Repo: "/repo",
+				Tasks: []manifest.Task{{Key: "t", Spec: c.spec, Check: "true"}},
+			}
+			got := rulesOf(Check(m), RuleWorktreeCommit)
+			if (len(got) == 1) != c.want {
+				t.Fatalf("spec %q: findings %+v, want fired=%v", c.spec, got, c.want)
 			}
 		})
 	}

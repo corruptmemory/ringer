@@ -144,3 +144,49 @@ func TestUnshareJailRunsCommand(t *testing.T) {
 		t.Errorf("output = %q, want %q", got, "hello")
 	}
 }
+
+func TestScriptSetChdir(t *testing.T) {
+	j := NewUnshareJail("/jail/root")
+	j.SetChdir("/work/task-1")
+	script := j.Script("/usr/bin/env", "FOO=1", "tool")
+	want := "exec chroot '/jail/root' /bin/sh -c 'cd '\\''/work/task-1'\\'' && exec '\\''/usr/bin/env'\\'' '\\''FOO=1'\\'' '\\''tool'\\'''"
+	if !strings.Contains(script, "cd ") || !strings.Contains(script, "/work/task-1") {
+		t.Fatalf("script lacks the chdir wrapper:\n%s", script)
+	}
+	if !strings.Contains(script, want) {
+		t.Fatalf("script chdir line mismatch.\nwant substring:\n%s\ngot script:\n%s", want, script)
+	}
+}
+
+func TestScriptWithoutChdirUnchanged(t *testing.T) {
+	j := NewUnshareJail("/jail/root")
+	script := j.Script("tool", "arg")
+	if strings.Contains(script, "/bin/sh -c") {
+		t.Fatalf("no-chdir script must keep the direct exec form:\n%s", script)
+	}
+}
+
+func TestLiveChdirLandsInTaskdir(t *testing.T) {
+	if r := CheckUnsharePreflight(); !r.OK() {
+		t.Skipf("userns preflight failed: %s", r.Error())
+	}
+	root := t.TempDir()
+	taskDir := t.TempDir()
+	j := NewUnshareJail(root)
+	// tmpfs /tmp FIRST, then the taskdir bind underneath it (t.TempDir()
+	// lives under /tmp — same ordering gotcha the Plan-1 worktree spike hit).
+	mounts := append(HostMounts(root), TmpfsMount(filepath.Join(root, "tmp")))
+	mounts = append(mounts, BindMount(taskDir, filepath.Join(root, taskDir), false))
+	if err := j.Setup(mounts); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	defer j.Teardown()
+	j.SetChdir(taskDir)
+	out, err := j.Command("pwd").CombinedOutput()
+	if err != nil {
+		t.Fatalf("pwd in jail: %v\n%s", err, out)
+	}
+	if got := strings.TrimSpace(string(out)); got != taskDir {
+		t.Fatalf("cwd inside jail = %q, want %q (the §9.3 cwd seam)", got, taskDir)
+	}
+}
