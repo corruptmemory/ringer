@@ -113,3 +113,48 @@ func TestInvalidLoggingFormatRejected(t *testing.T) {
 		t.Fatalf("want logging.format validation error, got %v", err)
 	}
 }
+
+func TestEngineJailKeysDecode(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	body := `
+[engines.opencode]
+bin = "opencode"
+args_template = ["run", "{spec}"]
+isolation = "jail"
+jail_state_dirs = ["~/.config/opencode", "~/.local/share/opencode"]
+jail_ro_binds = ["~/.opencode"]
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	e := c.Engines["opencode"]
+	if e.Isolation != "jail" {
+		t.Fatalf("Isolation = %q, want jail", e.Isolation)
+	}
+	if len(e.JailStateDirs) != 2 || len(e.JailRoBinds) != 1 || e.JailRoBinds[0] != "~/.opencode" {
+		t.Fatalf("jail dirs = %v / %v", e.JailStateDirs, e.JailRoBinds)
+	}
+}
+
+func TestExpandUser(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home dir: %v", err)
+	}
+	cases := []struct{ in, want string }{
+		{"~/x", filepath.Join(home, "x")},
+		{"~", home},
+		{"/abs/path", "/abs/path"},
+		{"rel/path", "rel/path"},
+	}
+	for _, c := range cases {
+		if got := ExpandUser(c.in); got != c.want {
+			t.Errorf("ExpandUser(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
