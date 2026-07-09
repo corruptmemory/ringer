@@ -50,6 +50,26 @@ func TestVerifyTimeout(t *testing.T) {
 	}
 }
 
+// TestVerifyTimeoutWithOrphanedChild guards against a hard-to-notice hang: a
+// check that backgrounds a grandchild process before the shell itself blocks
+// (here via `wait`) leaves that grandchild holding the inherited stdout/stderr
+// pipes open. Canceling the context only kills the direct child (sh); Wait()
+// inside CombinedOutput then blocks on pipe EOF until the orphaned grandchild
+// exits on its own — 30s later — unless Cmd.WaitDelay forces the pipes closed.
+// This test asserts the "hard timeout" promised by the Verify doc comment is
+// actually hard.
+func TestVerifyTimeoutWithOrphanedChild(t *testing.T) {
+	start := time.Now()
+	r := Verify(context.Background(), t.TempDir(), `sleep 30 & wait`, nil, 200*time.Millisecond)
+	elapsed := time.Since(start)
+	if r.Pass || !r.TimedOut {
+		t.Fatalf("expected timeout, got %+v", r)
+	}
+	if elapsed >= 10*time.Second {
+		t.Fatalf("Verify took %s; orphaned grandchild kept Wait() blocked past WaitDelay", elapsed)
+	}
+}
+
 func contains(s, sub string) bool { return len(s) >= len(sub) && (s == sub || indexOf(s, sub) >= 0) }
 func indexOf(s, sub string) int {
 	for i := 0; i+len(sub) <= len(s); i++ {

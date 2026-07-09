@@ -32,6 +32,14 @@ func Verify(ctx context.Context, taskDir, check string, expectFiles []string, ti
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "sh", "-c", check)
 	cmd.Dir = taskDir
+	// Without WaitDelay, a check that backgrounds a grandchild process (e.g.
+	// "server & wait") leaves that grandchild holding the inherited
+	// stdout/stderr pipes open even after the context cancels and kills the
+	// shell itself. Wait (inside CombinedOutput) would then block on pipe EOF
+	// until the orphan exits on its own, defeating the timeout. WaitDelay
+	// bounds that: once the context is done, Wait force-closes the pipes
+	// after this grace period so it returns promptly regardless.
+	cmd.WaitDelay = 2 * time.Second
 	out, err := cmd.CombinedOutput()
 	res.Output = string(out)
 	if cctx.Err() == context.DeadlineExceeded {
