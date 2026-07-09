@@ -112,6 +112,18 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 		return err
 	}
 
+	if dryRun {
+		// Dry-run prints the plan and exits; it must never fail on isolation
+		// selection (a host without a backend should still be able to inspect
+		// the plan), so selection happens only on the real run path below.
+		fmt.Fprintf(os.Stdout, "run %q: %d task(s), max_parallel=%d, identity=%s\n",
+			m.RunName, len(m.Tasks), m.MaxParallel, identity)
+		for _, t := range m.Tasks {
+			fmt.Fprintf(os.Stdout, "  - %s [%s]\n", t.Key, t.Engine)
+		}
+		return nil
+	}
+
 	// Isolation backend: selected once per run, only when some task will
 	// actually jail (spec §6 preflight rule) — a full_access task takes
 	// the unconfined lane and must not trigger selection (or a refusal)
@@ -120,15 +132,6 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 	iso, err := selectIsolator(m, engines, lg)
 	if err != nil {
 		return err
-	}
-
-	if dryRun {
-		fmt.Fprintf(os.Stdout, "run %q: %d task(s), max_parallel=%d, identity=%s\n",
-			m.RunName, len(m.Tasks), m.MaxParallel, identity)
-		for _, t := range m.Tasks {
-			fmt.Fprintf(os.Stdout, "  - %s [%s]\n", t.Key, t.Engine)
-		}
-		return nil
 	}
 
 	var st *store.Store
