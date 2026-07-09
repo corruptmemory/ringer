@@ -8,6 +8,7 @@ import (
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/lint"
 	"github.com/corruptmemory/ringer/internal/logging"
 	"github.com/corruptmemory/ringer/internal/manifest"
 	"github.com/corruptmemory/ringer/internal/runner"
@@ -52,6 +53,10 @@ func (c *runCmd) Execute(args []string) error {
 	if c.MaxParallel > 0 {
 		m.MaxParallel = c.MaxParallel
 	}
+
+	// Lint findings are advisory only — print and keep going, never block a run.
+	printLintFindings(lint.Check(m))
+
 	identity := config.ResolveIdentity(c.Identity, cfg, filepath.Dir(manifestPath))
 
 	// Engines: config engines plus a built-in mock pointing at this binary.
