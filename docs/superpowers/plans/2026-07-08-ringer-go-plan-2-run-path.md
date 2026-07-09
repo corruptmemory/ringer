@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `ringer run <manifest>` execute a manifest of tasks in parallel against pluggable engines, verify each by executing its check, retry failures once, and log every attempt to the SQLite store — headless, no isolation yet. **Milestone 1** (Tasks 1–8): a runnable, watchable end-to-end demo against the zero-cost `mock` engine. **Milestone 2** (Tasks 9–12): the `lint`/`demo` subcommands and real-engine ergonomics.
+**Goal:** Make `ringer run <manifest>` execute a manifest of tasks in parallel against pluggable engines, verify each by executing its check, retry failures once, and log every attempt to the SQLite store — headless, no isolation yet. **Milestone 1** (Tasks 1–9): a runnable, watchable end-to-end demo against the zero-cost `mock` engine. **Milestone 2** (Tasks 10–13): the `lint`/`demo` subcommands and real-engine ergonomics.
 
 **Architecture:** Builds directly on Plan 1's foundation (`internal/config`, `internal/store`, and — unused here — `internal/jail`). Adds `internal/{manifest,engine,verify,state,runner,lint}` and the `run`/`lint`/`demo`/`mock-worker` subcommands. The runner uses the actor pattern (one goroutine owns run state; a bounded goroutine pool executes tasks). **Isolation is out of scope** — every worker runs with `isolation=none`; the jail/Landlock integration is Plan 3.
 
@@ -1039,14 +1039,357 @@ git commit -m "feat: run-state writer and pid-pruned active-runs registry"
 
 ---
 
-### Task 6: Runner — actor-owned state
+### Task 6: Logging seam (`internal/logging`) + `[logging]` config + `--log-level`
+
+**Files:**
+- Create: `internal/logging/logging.go`, `internal/logging/capture.go`, `internal/logging/logging_test.go`
+- Modify: `internal/config/config.go` (add `[logging]` section + format validation), `internal/config/config_test.go`
+- Modify: `cmd/ringer/main.go` (add `--log-level` root flag + `resolveLogLevel` helper), `cmd/ringer/main_test.go`
+
+**Interfaces:**
+- Consumes: `config.AppConfig` (Plan 1).
+- Produces: `logging.Logger`, `logging.Default()`, `logging.New(Config)`, `logging.NewCapture()`, `config.LoggingConfig`, and `resolveLogLevel` (in `package main`).
+
+```go
+package logging // github.com/corruptmemory/ringer/internal/logging
+
+type Logger interface {
+	Debug(msg string, args ...any); Debugf(format string, args ...any)
+	Info(msg string, args ...any);  Infof(format string, args ...any)
+	Warn(msg string, args ...any);  Warnf(format string, args ...any)
+	Error(msg string, args ...any); Errorf(format string, args ...any)
+	WithLevel(level slog.Level) Logger
+}
+func Default() Logger                       // always-on Info->stderr, no config needed
+func New(cfg Config) (Logger, error)        // refines Default; errors on bad Format (never os.Exit)
+func NewCapture() (Logger, *Capture)        // synchronous-drain sink for tests + future HUD
+```
+
+**Design principle (load-bearing):** the logger is NEVER unconfigured. `Default()` is a working Info→stderr logger from the first instruction; `New(Config)` only REFINES level/format — it never *enables* logging. "Logging before logging is configured" is a non-problem because we own `main()`. No package `init()`, no CWD file read, no `os.Exit` inside the package — the CLI boundary owns fail-loud. The capture sink drains SYNCHRONOUSLY (mutex, no timer/linger), so a test asserts immediately after a logged call returns. (This whole task is compile-verified: `./build.sh --test` green across all packages, and the strict config loader was confirmed to accept the additive `[logging]` section.)
+
+- [ ] **Step 1: Write the failing tests** — `internal/logging/logging_test.go`:
+
+```go
+package logging
+
+import (
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/BurntSushi/toml"
+)
+
+func TestLevelFiltering(t *testing.T) {
+	logger, capt := NewCapture() // starts at Info per NewCapture's contract
+	logger.Debug("debug line")
+	if got := capt.String(); strings.Contains(got, "debug line") {
+		t.Fatalf("Debug at Info level should be suppressed, got: %q", got)
+	}
+	logger.Info("info line")
+	logger.Warn("warn line")
+	logger.Error("error line")
+	got := capt.String()
+	for _, want := range []string{"info line", "warn line", "error line"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("output missing %q, got: %q", want, got)
+		}
+	}
+}
+
+func TestPrintfMethods(t *testing.T) {
+	logger, capt := NewCapture()
+	logger.Debugf("debug %d %s", 1, "x") // suppressed at Info
+	logger.Infof("info %d %s", 2, "y")
+	got := capt.String()
+	if strings.Contains(got, "debug 1 x") {
+		t.Errorf("Debugf should be suppressed at Info level, got: %q", got)
+	}
+	if !strings.Contains(got, "info 2 y") {
+		t.Errorf("Infof missing formatted line, got: %q", got)
+	}
+}
+
+func TestCaptureIsSynchronousNotLingering(t *testing.T) {
+	logger, capt := NewCapture()
+	logger.Info("line one")
+	// No sleep: a synchronous, mutex-protected drain must have the line
+	// available the instant the logging call returns.
+	if got := capt.String(); !strings.Contains(got, "line one") {
+		t.Fatalf("expected synchronous capture of %q, got: %q", "line one", got)
+	}
+}
+
+func TestWithLevel(t *testing.T) {
+	logger, capt := NewCapture() // Info
+	logger.Debug("hidden")
+	if strings.Contains(capt.String(), "hidden") {
+		t.Fatalf("Debug should be hidden at Info level")
+	}
+	debugLogger := logger.WithLevel(slog.LevelDebug)
+	debugLogger.Debug("now visible")
+	if !strings.Contains(capt.String(), "now visible") {
+		t.Fatalf("WithLevel(Debug) should emit Debug lines, got: %q", capt.String())
+	}
+}
+
+func TestDefaultIsAlwaysAvailable(t *testing.T) {
+	logger := Default() // no configuration step
+	if logger == nil {
+		t.Fatal("Default() returned nil")
+	}
+	logger.Info("process starting") // must not panic
+}
+
+func TestNewBuildsFromConfig(t *testing.T) {
+	cases := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{"zero value defaults to text/info", Config{}, false},
+		{"explicit debug+json", Config{Level: slog.LevelDebug, Format: "json"}, false},
+		{"unknown format rejected", Config{Format: "xml"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l, err := New(tc.cfg)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("want error, got nil")
+				}
+				return
+			}
+			if err != nil || l == nil {
+				t.Fatalf("New: l=%v err=%v", l, err)
+			}
+		})
+	}
+}
+
+func TestConfigLevelParsesFromTOML(t *testing.T) {
+	type fixture struct {
+		Logging Config `toml:"logging"`
+	}
+	p := filepath.Join(t.TempDir(), "c.toml")
+	if err := os.WriteFile(p, []byte("[logging]\nlevel = \"debug\"\nformat = \"json\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var f fixture
+	if _, err := toml.DecodeFile(p, &f); err != nil {
+		t.Fatalf("DecodeFile: %v", err)
+	}
+	if f.Logging.Level != slog.LevelDebug || f.Logging.Format != "json" {
+		t.Errorf("parsed %+v", f.Logging)
+	}
+}
+```
+
+- [ ] **Step 2: Run to verify fail** — `./build.sh --test`.
+
+- [ ] **Step 3: Implement.** `internal/logging/logging.go`:
+
+```go
+// Package logging provides ringer's minimal, always-on logging interface.
+//
+// The logger is never unconfigured: Default returns a working Info-level
+// logger to stderr, usable from the very first line of startup, before any
+// config file or CLI flag has been parsed. Loading a Config via New only
+// refines the level and format of that same logger — it never "enables"
+// logging. This makes "logging before logging is configured" a non-problem.
+package logging
+
+import (
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+)
+
+type Logger interface {
+	Debug(msg string, args ...any)
+	Debugf(format string, args ...any)
+	Info(msg string, args ...any)
+	Infof(format string, args ...any)
+	Warn(msg string, args ...any)
+	Warnf(format string, args ...any)
+	Error(msg string, args ...any)
+	Errorf(format string, args ...any)
+	WithLevel(level slog.Level) Logger
+}
+
+// Config controls a Logger built by New. The zero value is valid and sane:
+// Level's zero value is slog.LevelInfo; an empty Format is treated as "text".
+type Config struct {
+	Level  slog.Level
+	Format string // "text" (default) or "json"
+}
+
+type slogLogger struct {
+	log    *slog.Logger
+	out    io.Writer
+	format string
+}
+
+// Default returns a working Info-level logger to stderr. Always safe to call,
+// requires no configuration — log through this before New has been called.
+func Default() Logger { return newSlogLogger(os.Stderr, slog.LevelInfo, "text") }
+
+// New builds a Logger from cfg. It is the only constructor that can fail
+// (unknown Format) and it never exits the process — the CLI boundary decides
+// how to surface the error.
+func New(cfg Config) (Logger, error) {
+	format := cfg.Format
+	if format == "" {
+		format = "text"
+	}
+	if format != "text" && format != "json" {
+		return nil, fmt.Errorf("logging: unknown format %q (want \"text\" or \"json\")", format)
+	}
+	return newSlogLogger(os.Stderr, cfg.Level, format), nil
+}
+
+func newSlogLogger(out io.Writer, level slog.Level, format string) *slogLogger {
+	return &slogLogger{log: slog.New(newHandler(out, level, format)), out: out, format: format}
+}
+
+func newHandler(out io.Writer, level slog.Level, format string) slog.Handler {
+	opts := &slog.HandlerOptions{Level: level}
+	if format == "json" {
+		return slog.NewJSONHandler(out, opts)
+	}
+	return slog.NewTextHandler(out, opts)
+}
+
+func (l *slogLogger) Debug(msg string, args ...any)    { l.log.Debug(msg, args...) }
+func (l *slogLogger) Debugf(format string, args ...any) { l.log.Debug(fmt.Sprintf(format, args...)) }
+func (l *slogLogger) Info(msg string, args ...any)     { l.log.Info(msg, args...) }
+func (l *slogLogger) Infof(format string, args ...any)  { l.log.Info(fmt.Sprintf(format, args...)) }
+func (l *slogLogger) Warn(msg string, args ...any)     { l.log.Warn(msg, args...) }
+func (l *slogLogger) Warnf(format string, args ...any)  { l.log.Warn(fmt.Sprintf(format, args...)) }
+func (l *slogLogger) Error(msg string, args ...any)    { l.log.Error(msg, args...) }
+func (l *slogLogger) Errorf(format string, args ...any) { l.log.Error(fmt.Sprintf(format, args...)) }
+
+// WithLevel returns a sibling logger (same destination + format) at level.
+func (l *slogLogger) WithLevel(level slog.Level) Logger {
+	return newSlogLogger(l.out, level, l.format)
+}
+```
+
+`internal/logging/capture.go`:
+
+```go
+package logging
+
+import (
+	"bytes"
+	"log/slog"
+	"sync"
+)
+
+// Capture is a deterministic, synchronous sink for a Logger built with
+// NewCapture. Every logging call writes into the buffer, under a mutex,
+// before the logging method returns — no background flush, timer, or linger.
+// A test can call String() immediately after a logged call and see the line.
+// Also usable as the backing store for a future in-process HUD.
+type Capture struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (c *Capture) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *Capture) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+// NewCapture returns a Logger writing synchronously into the returned Capture.
+func NewCapture() (Logger, *Capture) {
+	c := &Capture{}
+	return newSlogLogger(c, slog.LevelInfo, "text"), c
+}
+```
+
+Then the `[logging]` config section in `internal/config/config.go` — add `"log/slog"` to the imports, a `LoggingConfig` type, an `AppConfig.Logging` field, and a format-validation check in `Load` (mirrors the existing engine-isolation validation, "fail loudly on bad config"):
+
+```go
+// LoggingConfig mirrors logging.Config field-for-field (Level slog.Level,
+// Format string) instead of importing internal/logging, keeping config
+// dependency-light; the CLI boundary does the trivial conversion. slog.Level
+// implements encoding.TextUnmarshaler, so `level = "debug"` decodes for free.
+// Zero value == {Info, ""} == the sane default (absent section => Info/text).
+type LoggingConfig struct {
+	Level  slog.Level `toml:"level"`
+	Format string     `toml:"format"`
+}
+
+// ... add to AppConfig:  Logging LoggingConfig `toml:"logging"`
+
+// ... in Load, after the engine-isolation validation loop:
+	switch c.Logging.Format {
+	case "", "text", "json":
+	default:
+		return nil, fmt.Errorf("config %s: logging.format must be \"text\" or \"json\", got %q", path, c.Logging.Format)
+	}
+```
+
+And the `--log-level` flag + resolver in `cmd/ringer/main.go` (`resolveLogLevel` follows `config.ResolveIdentity`'s flag→config→default precedence; the package var `logger` is the always-on `Default()` until a subcommand refines it):
+
+```go
+type rootOptions struct {
+	Config   string `long:"config" description:"Path to config TOML (default: $RINGER_CONFIG or ~/.config/ringer/config.toml)"`
+	LogLevel string `long:"log-level" description:"Minimum log level: debug, info, warn, error (default: [logging].level, or info)"`
+}
+
+// logger is always-on from process start (never unconfigured); a subcommand
+// refines it via resolveLogLevel + logging.New once a config is loaded.
+var logger logging.Logger = logging.Default()
+
+// resolveLogLevel implements flag ?? config ?? default precedence. cfg may be nil.
+func resolveLogLevel(flagValue string, cfg *config.AppConfig) (slog.Level, error) {
+	if flagValue != "" {
+		var lvl slog.Level
+		if err := lvl.UnmarshalText([]byte(flagValue)); err != nil {
+			return 0, err
+		}
+		return lvl, nil
+	}
+	if cfg != nil {
+		return cfg.Logging.Level, nil // zero value == slog.LevelInfo
+	}
+	return slog.LevelInfo, nil
+}
+```
+
+Add matching tests to `internal/config/config_test.go` (`TestLoadAcceptsLoggingSection` — the strict-loader risk check — and `TestInvalidLoggingFormatRejected`) and `cmd/ringer/main_test.go` (`TestResolveLogLevel`, table-driven over flag/config/nil/invalid).
+
+- [ ] **Step 4: Run to verify pass** — `./build.sh --test`. Expected: all packages green; the strict loader accepts `[logging]`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/logging cmd/ringer/main.go cmd/ringer/main_test.go internal/config/config.go internal/config/config_test.go
+git commit -m "feat: internal/logging — always-on leveled slog seam, [logging] config, --log-level"
+```
+
+---
+
+### Task 7: Runner — actor-owned state
 
 **Files:**
 - Create: `internal/runner/actor.go`
 - Test: `internal/runner/actor_test.go`
 
 **Interfaces:**
-- Consumes: `state.TaskView`, `state.RunState` (Task 5).
+- Consumes: `state.TaskView`, `state.RunState` (Task 5); `logging.Logger` (Task 6).
 - Produces:
 
 ```go
@@ -1056,7 +1399,7 @@ package runner
 // The actor goroutine is the ONLY thing that touches the map; callers send commands.
 type actor struct { /* unexported: cmds chan, state map, meta */ }
 
-func newActor(runID, runName, identity string, keys []string) *actor
+func newActor(runID, runName, identity string, keys []string, lg logging.Logger) *actor
 func (a *actor) start()                                  // launches the goroutine
 func (a *actor) stop()                                   // idempotent trigger: recover-guarded close(cmds); logs a recovered double-stop
 func (a *actor) wait()                                   // blocks until the goroutine exits (sync.WaitGroup — N callers ok)
@@ -1077,11 +1420,13 @@ package runner
 import (
 	"sync"
 	"testing"
+
+	"github.com/corruptmemory/ringer/internal/logging"
 )
 
 func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 	keys := []string{"a", "b", "c"}
-	a := newActor("r1", "demo", "id", keys)
+	a := newActor("r1", "demo", "id", keys, logging.Default())
 	a.start()
 	defer a.stopAndWait()
 
@@ -1119,9 +1464,9 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 package runner
 
 import (
-	"log"
 	"sync"
 
+	"github.com/corruptmemory/ringer/internal/logging"
 	"github.com/corruptmemory/ringer/internal/state"
 )
 
@@ -1130,17 +1475,18 @@ type actor struct {
 	keys                     []string
 	cmds                     chan func()
 	wg                       sync.WaitGroup // wait() blocks on this — N callers ok
+	lg                       logging.Logger
 	tasks                    map[string]*state.TaskView
 }
 
-func newActor(runID, runName, identity string, keys []string) *actor {
+func newActor(runID, runName, identity string, keys []string, lg logging.Logger) *actor {
 	tasks := make(map[string]*state.TaskView, len(keys))
 	for _, k := range keys {
 		tasks[k] = &state.TaskView{Key: k, Status: "pending"}
 	}
 	return &actor{
 		runID: runID, runName: runName, identity: identity, keys: keys,
-		cmds: make(chan func()), tasks: tasks,
+		cmds: make(chan func()), lg: lg, tasks: tasks,
 	}
 }
 
@@ -1165,7 +1511,7 @@ func (a *actor) start() {
 func (a *actor) stop() {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("runner actor %s: recovered panic in stop (double stop?): %v", a.runID, r)
+			a.lg.Warnf("runner actor %s: recovered panic in stop (double stop?): %v", a.runID, r)
 		}
 	}()
 	close(a.cmds)
@@ -1231,7 +1577,7 @@ git commit -m "feat: runner actor — single-owner run state, no mutex"
 
 ---
 
-### Task 7: Runner — worker execution (spawn, tee, timeout, kill)
+### Task 8: Runner — worker execution (spawn, tee, timeout, kill)
 
 **Files:**
 - Create: `internal/runner/worker.go`
@@ -1318,7 +1664,164 @@ func TestRunWorkerClosesStdin(t *testing.T) {
 
 - [ ] **Step 2: Run to verify fail** — `./build.sh --test`.
 
-- [ ] **Step 3: Implement.** Key points: `exec.CommandContext` won't give process-group kill, so build the `*exec.Cmd` manually, set `cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}`, `cmd.Stdin, _ = os.Open(os.DevNull)`, wire an `io.MultiWriter(logFile, ringBuffer, w)` as both Stdout and Stderr, `cmd.Start()`, then a select on a `done` channel vs `ctx.Done()`/timer; on timeout `syscall.Kill(-pgid, SIGTERM)`, 5s grace, `syscall.Kill(-pgid, SIGKILL)`. Ring buffer is a fixed 1MB `[]byte` with wraparound; `Tail` returns its contents in order. Provide the full implementation (ring buffer as a small type in the same file).
+- [ ] **Step 3: Implement** `internal/runner/worker.go` (the code below is compile-verified and green under `--race`). Notes: `exec.CommandContext` kills only the leader, so build `*exec.Cmd` manually with `Setpgid`; because `Stdout`/`Stderr` are an `io.MultiWriter` (not an `*os.File`), `os/exec`'s own output-copy goroutines are joined by `cmd.Wait()`, so `ring.Tail()` read after Wait is race-free with no hand-rolled `io.Copy`. `runWorker` takes no logger — it returns a `WorkerOutcome`; the caller (Task 9) does the logging.
+
+```go
+// Package runner spawns worker subprocesses with the frozen process
+// lifecycle invariants described in the project design (§9): closed stdin,
+// merged stdout/stderr, a dedicated process group so the whole tree can be
+// signalled, and tee'd output capture with a bounded tail for token
+// scraping and failure context.
+package runner
+
+import (
+	"context"
+	"io"
+	"os"
+	"os/exec"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// ringBufferSize is the fixed capacity of the ring buffer used to retain
+// the tail of a worker's combined output.
+const ringBufferSize = 1 << 20 // 1MB
+
+// ringBuffer is a fixed-size io.Writer that retains only the most recently
+// written ringBufferSize bytes, overwriting the oldest data (wraparound).
+type ringBuffer struct {
+	mu   sync.Mutex
+	buf  [ringBufferSize]byte
+	pos  int  // next write offset within buf
+	full bool // true once buf has wrapped at least once
+}
+
+func (r *ringBuffer) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	n := len(p)
+	if n == 0 {
+		return 0, nil
+	}
+	if n >= ringBufferSize {
+		copy(r.buf[:], p[n-ringBufferSize:])
+		r.pos = 0
+		r.full = true
+		return n, nil
+	}
+	end := r.pos + n
+	if end <= ringBufferSize {
+		copy(r.buf[r.pos:end], p)
+		r.pos = end
+		if r.pos == ringBufferSize {
+			r.pos = 0
+			r.full = true
+		}
+	} else {
+		first := ringBufferSize - r.pos
+		copy(r.buf[r.pos:], p[:first])
+		copy(r.buf[:end-ringBufferSize], p[first:])
+		r.pos = end - ringBufferSize
+		r.full = true
+	}
+	return n, nil
+}
+
+// Tail returns the buffered contents in chronological order (oldest first).
+func (r *ringBuffer) Tail() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.full {
+		out := make([]byte, r.pos)
+		copy(out, r.buf[:r.pos])
+		return string(out)
+	}
+	out := make([]byte, ringBufferSize)
+	copy(out, r.buf[r.pos:])
+	copy(out[ringBufferSize-r.pos:], r.buf[:r.pos])
+	return string(out)
+}
+
+// WorkerOutcome describes how a worker subprocess finished.
+type WorkerOutcome struct {
+	ExitCode int
+	TimedOut bool
+	Tail     string // last ~1MB of combined output (for token scraping + failure context)
+	Err      error
+}
+
+// runWorker spawns bin+argv in taskDir with the frozen invariants:
+// stdin=/dev/null, stderr merged into stdout, new process group (Setpgid),
+// output teed to logPath + a 1MB ring buffer + w (usually os.Stdout).
+// On ctx cancel/timeout: SIGTERM the group, 5s grace, then SIGKILL.
+func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath string, w io.Writer, timeout time.Duration) WorkerOutcome {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		return WorkerOutcome{Err: err}
+	}
+	defer devNull.Close()
+
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return WorkerOutcome{Err: err}
+	}
+	defer logFile.Close()
+
+	ring := &ringBuffer{}
+	mw := io.MultiWriter(logFile, ring, w)
+
+	cmd := exec.Command(bin, argv...)
+	cmd.Dir = taskDir
+	cmd.Stdin = devNull
+	cmd.Stdout = mw
+	cmd.Stderr = mw
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if err := cmd.Start(); err != nil {
+		return WorkerOutcome{Err: err, Tail: ring.Tail()}
+	}
+
+	// Setpgid without an explicit Pgid makes the child the leader of its own
+	// new process group, so its pid doubles as the group id.
+	pgid := cmd.Process.Pid
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// cmd.Wait also joins the internal goroutines os/exec uses to copy
+	// Stdout/Stderr into mw (since mw isn't an *os.File), so once waitErr is
+	// received all writes into ring have happened and Tail() is race-free.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+
+	var timedOut bool
+	var waitErr error
+	select {
+	case waitErr = <-waitDone:
+	case <-timeoutCtx.Done():
+		timedOut = true
+		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		select {
+		case waitErr = <-waitDone:
+		case <-time.After(5 * time.Second):
+			_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			waitErr = <-waitDone
+		}
+	}
+
+	outcome := WorkerOutcome{TimedOut: timedOut, Tail: ring.Tail()}
+	if waitErr != nil {
+		if exitErr, ok := waitErr.(*exec.ExitError); ok {
+			outcome.ExitCode = exitErr.ExitCode()
+		} else {
+			outcome.Err = waitErr
+		}
+	}
+	return outcome
+}
+```
 
 - [ ] **Step 4: Run to verify pass, including race** — `./build.sh --test --race`, expect PASS (the tee writes from one goroutine; assert no races).
 
@@ -1331,27 +1834,28 @@ git commit -m "feat: runner worker spawn — frozen invariants (stdin closed, pg
 
 ---
 
-### Task 8: Runner — task loop, retry, and the end-to-end mock run (**Milestone 1**)
+### Task 9: Runner — task loop, retry, and the end-to-end mock run (**Milestone 1**)
 
 **Files:**
 - Create: `internal/runner/runner.go`, `cmd/ringer/run.go`
 - Test: `internal/runner/runner_test.go` (E2E through the mock engine)
 
 **Interfaces:**
-- Consumes: everything so far — `manifest`, `engine`, `verify`, `state`, `store`, the actor (T6), `runWorker` (T7).
+- Consumes: everything so far — `manifest`, `engine`, `verify`, `state`, `store`, `logging` (T6), the actor (T7), `runWorker` (T8).
 - Produces:
 
 ```go
 package runner
 
 type Options struct {
-	Manifest   *manifest.Manifest
-	Engines    map[string]config.EngineConfig
-	StateDir   string
-	Identity   string
-	Store      *store.Store  // may be nil (skip eval logging)
-	Stdout     io.Writer
-	MaxParallel int          // 0 -> len(tasks)
+	Manifest    *manifest.Manifest
+	Engines     map[string]config.EngineConfig
+	StateDir    string
+	Identity    string
+	Store       *store.Store    // may be nil (skip eval logging)
+	Stdout      io.Writer
+	Logger      logging.Logger  // nil -> logging.Default()
+	MaxParallel int             // 0 -> len(tasks)
 }
 
 type TaskResult struct { Key, Verdict string; Attempts int; Tokens int64 }
@@ -1363,7 +1867,7 @@ type RunResult struct { RunID string; Results []TaskResult; AllPassed bool }
 func Run(ctx context.Context, opts Options) (RunResult, error)
 ```
 
-Per-task flow (max 2 attempts): mkdir `<workdir>/<key>`; build argv via `engine.BuildArgv`; `runWorker`; `verify.Verify`; on PASS → record; on FAIL/TIMEOUT and attempt 1 → append failure context (`"\n\n--- Previous attempt failed. Check output:\n" + tail-of-check-output`) to the spec and re-run; record final verdict. Each attempt → `store.InsertAttempt`. A background ticker flushes `actor.snapshot()` → `state.WriteRunState` every second and once at the end; `state.RegisterActiveRun` at start, `UnregisterActiveRun` at end. RunID is `<run_name>-<unix-nanos-from-ctx-or-counter>` — since Date/random aren't available in this package either, derive it from `run_name` + a monotonic counter seeded by the caller (the `run` subcommand passes a timestamp string).
+Per-task flow (max 2 attempts): mkdir `<workdir>/<key>`; build argv via `engine.BuildArgv`; `runWorker`; `verify.Verify`; on PASS → record; on FAIL/TIMEOUT and attempt 1 → append failure context (`"\n\n--- Previous attempt failed. Check output:\n" + tail-of-check-output`) to the spec and re-run; record final verdict. Each attempt → `store.InsertAttempt`. A background ticker flushes `actor.snapshot()` → `state.WriteRunState` every second and once at the end; `state.RegisterActiveRun` at start, `UnregisterActiveRun` at end. RunID is `<run_name>-<time.Now().UnixNano()>` — this is real Go, so `time.Now()` is available (the workflow-script `Date`/random ban does NOT apply to the ringer binary); `StartedAt`/`UpdatedAt`/`CreatedAt` are RFC3339 UTC. (Per-task `Engine`/`Model` in the run-state `TaskView` are left empty in Plan 2 — cosmetic only; the live fields are status/verdict/tokens. Populated when the HUD needs them, Plan 4.)
 
 - [ ] **Step 1: Write the failing E2E test** (the milestone-1 proof — a real `ringer` process is NOT needed; call `runner.Run` directly with the mock engine pointed at the built binary):
 
@@ -1440,7 +1944,392 @@ func TestRunEndToEndMockEngine(t *testing.T) {
 
 - [ ] **Step 2: Run to verify fail** — `./build.sh --test`.
 
-- [ ] **Step 3: Implement `runner.Run`** (task loop with a semaphore channel `make(chan struct{}, maxParallel)`, `errgroup`-style `sync.WaitGroup`, per-task attempts, failure-context injection, store logging, the 1s state-flush ticker goroutine, active-run register/unregister). And `cmd/ringer/run.go` — the `run` subcommand: load config, resolve identity, load+validate manifest, inject the mock/codex engines, `engine.Preflight`, open the store at `config.DBPath()`, call `runner.Run`, print a verdict table, exit non-zero if any task failed. Flags: `--max-parallel`, `--identity`, `--dry-run` (print the plan and exit), `--no-dashboard` (accepted, always-on in Plan 2 since there's no HUD yet).
+- [ ] **Step 3: Implement `runner.Run`** — the actor-owned task loop (semaphore-bounded parallelism, per-task 2-attempt flow with failure-context injection, store logging, 1s state-flush ticker, active-run register/unregister). The actor is the single owner of run state; the result is built from its final snapshot.
+
+```go
+// internal/runner/runner.go
+package runner
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/corruptmemory/ringer/internal/config"
+	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/logging"
+	"github.com/corruptmemory/ringer/internal/manifest"
+	"github.com/corruptmemory/ringer/internal/state"
+	"github.com/corruptmemory/ringer/internal/store"
+	"github.com/corruptmemory/ringer/internal/verify"
+)
+
+const defaultTimeoutS = 900
+
+// Run executes the manifest end-to-end: prepare each task dir, run its worker
+// (bounded by MaxParallel), verify, retry once with failure context appended,
+// log each attempt to Store, and flush run-state each second. Headless.
+func Run(ctx context.Context, opts Options) (RunResult, error) {
+	m := opts.Manifest
+	lg := opts.Logger
+	if lg == nil {
+		lg = logging.Default()
+	}
+	if m.Worktrees {
+		return RunResult{}, fmt.Errorf("worktrees mode lands in Plan 3")
+	}
+
+	keys := make([]string, len(m.Tasks))
+	for i, t := range m.Tasks {
+		keys[i] = t.Key
+	}
+
+	runID := fmt.Sprintf("%s-%d", m.RunName, time.Now().UnixNano())
+	startedAt := time.Now().UTC().Format(time.RFC3339)
+
+	a := newActor(runID, m.RunName, opts.Identity, keys, lg)
+	a.start()
+	defer a.stopAndWait()
+
+	_ = state.RegisterActiveRun(opts.StateDir, runID, os.Getpid(), m.RunName, opts.Identity, startedAt)
+	defer func() { _ = state.UnregisterActiveRun(opts.StateDir, runID) }()
+
+	writeState := func(done bool) {
+		s := a.snapshot()
+		s.PID = os.Getpid()
+		s.StartedAt = startedAt
+		s.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		s.Done = done
+		if err := state.WriteRunState(opts.StateDir, s); err != nil {
+			lg.Warnf("run %s: write state: %v", runID, err)
+		}
+	}
+
+	flushDone := make(chan struct{})
+	go func() {
+		t := time.NewTicker(1 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-flushDone:
+				return
+			case <-t.C:
+				writeState(false)
+			}
+		}
+	}()
+
+	maxPar := opts.MaxParallel
+	if maxPar <= 0 {
+		maxPar = len(m.Tasks)
+	}
+	if maxPar < 1 {
+		maxPar = 1
+	}
+	sem := make(chan struct{}, maxPar)
+	var wg sync.WaitGroup
+	for _, task := range m.Tasks {
+		wg.Add(1)
+		go func(task manifest.Task) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			runTask(ctx, opts, a, lg, runID, task)
+		}(task)
+	}
+	wg.Wait()
+
+	close(flushDone)
+	writeState(true) // final flush, Done=true
+
+	// Result from the authoritative actor snapshot.
+	snap := a.snapshot()
+	res := RunResult{RunID: runID, AllPassed: true}
+	for _, tv := range snap.Tasks {
+		verdict := statusToVerdict(tv.Status)
+		if verdict != "PASS" {
+			res.AllPassed = false
+		}
+		res.Results = append(res.Results, TaskResult{
+			Key: tv.Key, Verdict: verdict, Attempts: tv.Attempt, Tokens: tv.Tokens,
+		})
+	}
+	return res, nil
+}
+
+// runTask runs one manifest task through up to two attempts.
+func runTask(ctx context.Context, opts Options, a *actor, lg logging.Logger, runID string, task manifest.Task) {
+	engineName := task.Engine
+	if engineName == "" {
+		engineName = "codex"
+	}
+	engConf, ok := opts.Engines[engineName]
+	if !ok {
+		lg.Errorf("task %s: unknown engine %q", task.Key, engineName)
+		a.setResult(task.Key, "failed", -1, task.Verified, "")
+		return
+	}
+	if engConf.Isolation == "jail" {
+		lg.Errorf("task %s: jail isolation lands in Plan 3", task.Key)
+		a.setResult(task.Key, "failed", -1, task.Verified, "")
+		return
+	}
+
+	taskDir := filepath.Join(opts.Manifest.Workdir, task.Key)
+	if err := os.MkdirAll(taskDir, 0o755); err != nil {
+		lg.Errorf("task %s: mkdir %s: %v", task.Key, taskDir, err)
+		a.setResult(task.Key, "failed", -1, task.Verified, "")
+		return
+	}
+	logsDir := filepath.Join(opts.Manifest.Workdir, "logs")
+	_ = os.MkdirAll(logsDir, 0o755)
+	logPath := filepath.Join(logsDir, task.Key+".worker.log")
+
+	model := task.Model
+	if model == "" {
+		model = engConf.ModelDefault
+	}
+	timeoutS := task.TimeoutS
+	if timeoutS == 0 {
+		timeoutS = defaultTimeoutS
+	}
+	timeout := time.Duration(timeoutS) * time.Second
+
+	spec := task.Spec
+	verdict := "ERROR"
+	var tokens int64 = -1
+	attempts := 0
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		attempts = attempt
+		a.setStatus(task.Key, "running", attempt)
+
+		bin, argv := engine.BuildArgv(engConf, taskDir, spec, model, task.EngineArgs, task.FullAccess)
+		lg.Infof("task %s: attempt %d: %s", task.Key, attempt, bin)
+		outcome := runWorker(ctx, bin, argv, taskDir, logPath, opts.Stdout, timeout)
+		if outcome.Err != nil {
+			lg.Errorf("task %s: spawn error: %v", task.Key, outcome.Err)
+		}
+		tokens = scrapeTokens(engConf.TokenRegex, outcome.Tail)
+
+		vres := verify.Verify(ctx, taskDir, task.Check, task.ExpectFiles, timeout)
+		switch {
+		case outcome.TimedOut:
+			verdict = "TIMEOUT"
+		case outcome.Err != nil:
+			verdict = "ERROR"
+		case vres.Pass:
+			verdict = "PASS"
+		default:
+			verdict = "FAIL"
+		}
+
+		if opts.Store != nil {
+			if err := opts.Store.InsertAttempt(store.Attempt{
+				RunID: runID, RunName: opts.Manifest.RunName, TaskKey: task.Key,
+				Engine: engineName, Model: model, TaskType: task.TaskType,
+				Verdict: verdict, Retry: attempt - 1, Tokens: tokens,
+				CheckOutput: vres.Output, Identity: opts.Identity,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339),
+			}); err != nil {
+				lg.Warnf("task %s: insert attempt: %v", task.Key, err)
+			}
+		}
+
+		if verdict == "PASS" {
+			break
+		}
+		if attempt == 1 {
+			// Inject failure context into the spec for the retry.
+			spec = task.Spec + "\n\n--- Previous attempt failed. Check output:\n" + vres.Output
+			lg.Warnf("task %s: attempt 1 %s; retrying", task.Key, verdict)
+		}
+	}
+
+	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath)
+	lg.Infof("task %s: %s (%d attempt(s), tokens=%d)", task.Key, verdict, attempts, tokens)
+}
+
+// scrapeTokens pulls a token count from the tail using the engine's
+// token_regex (last match wins; last capture group, or whole match if none).
+// Returns -1 when unknown.
+func scrapeTokens(tokenRegex, tail string) int64 {
+	if tokenRegex == "" {
+		return -1
+	}
+	re, err := regexp.Compile(tokenRegex)
+	if err != nil {
+		return -1
+	}
+	matches := re.FindAllStringSubmatch(tail, -1)
+	if len(matches) == 0 {
+		return -1
+	}
+	last := matches[len(matches)-1]
+	grp := last[len(last)-1]
+	n, err := strconv.ParseInt(strings.TrimSpace(grp), 10, 64)
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
+func statusToVerdict(status string) string {
+	switch status {
+	case "passed":
+		return "PASS"
+	case "timeout":
+		return "TIMEOUT"
+	case "failed":
+		return "FAIL"
+	default:
+		return "ERROR"
+	}
+}
+
+func verdictToStatus(verdict string) string {
+	switch verdict {
+	case "PASS":
+		return "passed"
+	case "TIMEOUT":
+		return "timeout"
+	default:
+		return "failed"
+	}
+}
+```
+
+- [ ] **Step 3b: Implement `cmd/ringer/run.go`** — the `run` subcommand: load config, build the logger (fail-loud at the CLI boundary), resolve identity, load+validate the manifest, inject the built-in `mock` engine (pointing at this binary), preflight, open the store, call `runner.Run`, print a verdict table, exit non-zero if any task failed.
+
+```go
+// cmd/ringer/run.go
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/corruptmemory/ringer/internal/config"
+	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/logging"
+	"github.com/corruptmemory/ringer/internal/manifest"
+	"github.com/corruptmemory/ringer/internal/runner"
+	"github.com/corruptmemory/ringer/internal/store"
+)
+
+type runCmd struct {
+	MaxParallel int    `long:"max-parallel" description:"override manifest max_parallel"`
+	Identity    string `long:"identity" description:"identity for eval rows (default: resolved from config/env/hostname)"`
+	DryRun      bool   `long:"dry-run" description:"print the plan and exit"`
+	NoDashboard bool   `long:"no-dashboard" description:"accepted; always headless in Plan 2 (no HUD yet)"`
+	Args        struct {
+		Manifest string `positional-arg-name:"MANIFEST" description:"path to the manifest JSON"`
+	} `positional-args:"yes" required:"yes"`
+}
+
+func (c *runCmd) Execute(args []string) error {
+	cfgPath := opts.Config
+	if cfgPath == "" {
+		cfgPath = config.DefaultPath()
+	}
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return err
+	}
+
+	// Build the logger — fail loud here, at the CLI boundary, not in a library init().
+	lvl, err := resolveLogLevel(opts.LogLevel, cfg)
+	if err != nil {
+		return fmt.Errorf("--log-level: %w", err)
+	}
+	lg, err := logging.New(logging.Config{Level: lvl, Format: cfg.Logging.Format})
+	if err != nil {
+		return err
+	}
+
+	manifestPath := c.Args.Manifest
+	m, err := manifest.FromPath(manifestPath)
+	if err != nil {
+		return err
+	}
+	if c.MaxParallel > 0 {
+		m.MaxParallel = c.MaxParallel
+	}
+	identity := config.ResolveIdentity(c.Identity, cfg, filepath.Dir(manifestPath))
+
+	// Engines: config engines plus a built-in mock pointing at this binary.
+	self, _ := os.Executable()
+	engines := map[string]config.EngineConfig{}
+	for k, v := range cfg.Engines {
+		engines[k] = v
+	}
+	if _, ok := engines["mock"]; !ok {
+		engines["mock"] = config.EngineConfig{
+			Bin: self, ArgsTemplate: []string{"mock-worker", "{spec}"}, Isolation: "none",
+		}
+	}
+
+	used := map[string]bool{}
+	for _, t := range m.Tasks {
+		name := t.Engine
+		if name == "" {
+			name = "codex"
+		}
+		used[name] = true
+	}
+	if err := engine.Preflight(engines, used); err != nil {
+		return err
+	}
+
+	if c.DryRun {
+		fmt.Fprintf(os.Stdout, "run %q: %d task(s), max_parallel=%d, identity=%s\n",
+			m.RunName, len(m.Tasks), m.MaxParallel, identity)
+		for _, t := range m.Tasks {
+			fmt.Fprintf(os.Stdout, "  - %s [%s]\n", t.Key, t.Engine)
+		}
+		return nil
+	}
+
+	var st *store.Store
+	if s, err := store.Open(cfg.DBPath()); err != nil {
+		lg.Warnf("eval store unavailable (%v); continuing without eval logging", err)
+	} else {
+		st = s
+		defer st.Close()
+	}
+
+	res, err := runner.Run(context.Background(), runner.Options{
+		Manifest: m, Engines: engines, StateDir: cfg.StateDirPath(),
+		Identity: identity, Store: st, Stdout: os.Stdout, Logger: lg,
+		MaxParallel: m.MaxParallel,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stdout, "\n%-20s %-8s %-9s %s\n", "TASK", "VERDICT", "ATTEMPTS", "TOKENS")
+	for _, r := range res.Results {
+		fmt.Fprintf(os.Stdout, "%-20s %-8s %-9d %d\n", r.Key, r.Verdict, r.Attempts, r.Tokens)
+	}
+	if !res.AllPassed {
+		return fmt.Errorf("run %s: one or more tasks failed", res.RunID)
+	}
+	return nil
+}
+
+func init() {
+	parser.AddCommand("run", "Run a manifest", "Execute a manifest of tasks against pluggable engines.", &runCmd{})
+}
+```
 
 - [ ] **Step 4: Run to verify pass** — `./build.sh --test` then a real smoke:
 
@@ -1465,7 +2354,7 @@ git commit -m "feat: run subcommand — verified parallel run, retry, eval loggi
 
 ---
 
-### Task 9: Lint package + `lint` subcommand + run warnings
+### Task 10: Lint package + `lint` subcommand + run warnings
 
 **Files:**
 - Create: `internal/lint/lint.go`, `cmd/ringer/lint.go`
@@ -1503,7 +2392,7 @@ git commit -m "feat: lint heuristics + lint subcommand + non-blocking run warnin
 
 ---
 
-### Task 10: `demo` subcommand
+### Task 11: `demo` subcommand
 
 **Files:**
 - Create: `cmd/ringer/demo.go`
@@ -1521,21 +2410,21 @@ git commit -m "feat: lint heuristics + lint subcommand + non-blocking run warnin
 
 ---
 
-### Task 11: Wire the E2E + demo into CI; Plan-2 acceptance
+### Task 12: Wire the E2E + demo into CI; Plan-2 acceptance
 
 **Files:**
 - Modify: none expected (CI already runs `./build.sh --test`, which now includes the runner E2E).
 
 **Interfaces:** none.
 
-- [ ] **Step 1** Confirm the runner E2E test (Task 8) runs under `./build.sh --test` on this machine (it compiles the binary via `go build`, which needs the module — fine in-repo).
+- [ ] **Step 1** Confirm the runner E2E test (Task 9) runs under `./build.sh --test` on this machine (it compiles the binary via `go build`, which needs the module — fine in-repo).
 - [ ] **Step 2** Push the branch; verify CI green on ubuntu-latest + macos-latest (the E2E spawns `sh` and the built binary — both present on runners; no userns needed since isolation=none).
 - [ ] **Step 3** If the E2E is too slow or flaky in CI (it builds the binary), gate it behind `testing.Short()` skip in `-short` OR accept the build cost — decide based on observed CI time; document.
 - [ ] **Step 4** Commit any CI adjustment.
 
 ---
 
-### Task 12: Plan-2 final whole-branch review + finish
+### Task 13: Plan-2 final whole-branch review + finish
 
 Not a coding task — the controller runs the final whole-branch review (opus) over `main..HEAD`, triages findings, then uses `superpowers:finishing-a-development-branch`. Carry-forwards to Plan 3: isolation (`Isolator` interface, jail integration with the **cwd seam fix** — `chroot` lands cwd at `/`, so the jailed spawn must inject `cd <taskdir>` / set the worker's dir inside the jail script to honor the frozen `cwd=taskdir` contract), the Landlock fallback spike, worktrees mode, and the `store.Checkpoint`/connector-hook items already recorded.
 
@@ -1543,7 +2432,7 @@ Not a coding task — the controller runs the final whole-branch review (opus) o
 
 ## Self-Review (completed at write time)
 
-- **Spec coverage (Plan 2 scope):** run path §5 → Tasks 6-8; engine spawn contract §9.3 → Tasks 2,7; manifest schema §9.1 → Task 1; verify §5 → Task 4; on-disk state §9.4 → Task 5; eval rows → Task 8 (via Plan 1 store); mock-worker → Task 3; lint → Task 9; demo → Task 10; CLI surface §3 (run/lint/demo/mock-worker) → Tasks 3,8,9,10. Deferred by design: isolation/jail (Plan 3), HUD/artifacts (Plan 4), models/catalog/scoreboard + Python cutover (Plan 5), worktrees mode (Plan 3).
-- **Placeholders:** Tasks 1-6 have complete code. Tasks 7-10 specify complete interfaces + tests + the non-obvious mechanics (pgid kill, ring buffer, retry-context injection, the deterministic-retry mock sentinel) in prose where the code is long; the implementer writes the mechanical body against the given tests. This is the one deviation from "complete code in every step" — justified for the two large tasks (worker spawn, runner loop) whose full bodies are ~150 lines each; the tests and mechanics are fully pinned so there's no ambiguity, and the subagent review loop covers the fill-in.
+- **Spec coverage (Plan 2 scope):** logging seam → Task 6; run path §5 → Tasks 7-9; engine spawn contract §9.3 → Tasks 2,8; manifest schema §9.1 → Task 1; verify §5 → Task 4; on-disk state §9.4 → Task 5; eval rows → Task 9 (via Plan 1 store); mock-worker → Task 3; lint → Task 10; demo → Task 11; CLI surface §3 (run/lint/demo/mock-worker) → Tasks 3,9,10,11. Deferred by design: isolation/jail (Plan 3), HUD/artifacts (Plan 4), models/catalog/scoreboard + Python cutover (Plan 5), worktrees mode (Plan 3).
+- **Placeholders:** Tasks 1-9 now have complete code — including the two large runner tasks (worker spawn T8, task loop + `run` subcommand T9). The logging package (T6) and the worker (T8) were compile-verified in isolated worktrees (`./build.sh --test`, worker also `--race`) before their code landed here; the runner (T9) is authored against those verified signatures but can only be fully compiled once T1–T8 exist, so its first real build is during execution. Only Tasks 10-11 (lint, demo) still specify interfaces + tests + the non-obvious mechanics in prose where the code is long; the implementer writes those mechanical bodies against the given tests, and the subagent review loop covers the fill-in.
 - **Type consistency:** `manifest.Task`/`Manifest`, `config.EngineConfig` (Plan 1), `store.Attempt`/`InsertAttempt` (Plan 1), `state.RunState`/`TaskView`, `verify.Result`, `engine.BuildArgv` signature, and `runner.Options`/`RunResult` are consistent across the tasks that produce and consume them.
 - **Known risk flagged for execution:** Task 8's deterministic fail→retry test may need a minimal `mock-worker` grammar addition (a fail-once sentinel) — called out in the task so the implementer handles it deliberately rather than faking a retry.
