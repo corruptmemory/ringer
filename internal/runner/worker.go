@@ -16,6 +16,12 @@ type WorkerOutcome struct {
 	Err      error
 }
 
+// termGrace is the delay between SIGTERM and SIGKILL when a worker times
+// out. Frozen at 5s per the §9.3 contract for production use; tests may
+// shorten it (non-parallel, restored via t.Cleanup) to keep the SIGKILL
+// fallback path fast to exercise.
+var termGrace = 5 * time.Second
+
 // runWorker executes bin with argv in taskDir. Stdin is closed (backed by
 // /dev/null); stdout and stderr are merged and teed to a log file at
 // logPath and to the caller-supplied writer w (the caller composes w, e.g.
@@ -62,13 +68,24 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 	select {
 	case waitErr = <-waitDone:
 	case <-timeoutCtx.Done():
-		timedOut = true
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
+		// The child may have exited at essentially the same instant the
+		// timeout fired, in which case waitDone is already buffered even
+		// though this branch of the select was chosen. Recheck
+		// non-blockingly before signaling: if the process is already
+		// reaped, sending to -pgid could hit a recycled process group
+		// instead of a no-op, and the outcome must not be mislabeled as
+		// timed out.
 		select {
 		case waitErr = <-waitDone:
-		case <-time.After(5 * time.Second):
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-			waitErr = <-waitDone
+		default:
+			timedOut = true
+			_ = syscall.Kill(-pgid, syscall.SIGTERM)
+			select {
+			case waitErr = <-waitDone:
+			case <-time.After(termGrace):
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+				waitErr = <-waitDone
+			}
 		}
 	}
 
