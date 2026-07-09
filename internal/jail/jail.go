@@ -9,6 +9,11 @@
 // portable to hosts with restricted unprivileged userns (e.g. CI runners,
 // hardened prod hosts).
 //
+// DIVERGENCE from upstream flywheel (2026-07-09): UnshareJail gained
+// SetChdir(dir) — ringer's spawn contract requires the jailed command to
+// start in its taskdir, while chroot alone lands cwd at "/". The script
+// wraps the exec in `/bin/sh -c 'cd <dir> && exec …'` when set.
+//
 // Package jail provides chroot jail lifecycle management with pluggable
 // implementations for root-based and user-namespace-based isolation.
 package jail

@@ -15,6 +15,7 @@ type UnshareJail struct {
 	root     string
 	mounts   []Mount
 	dropUser string // if set, use runuser -u <user> before exec
+	chdir    string // if set, cd here (post-chroot path) before exec
 }
 
 // NewUnshareJail creates a new UnshareJail rooted at the given directory.
@@ -29,6 +30,15 @@ func NewUnshareJail(root string) *UnshareJail {
 // safety check). The username must exist in /etc/passwd inside the jail.
 func (j *UnshareJail) SetDropUser(username string) {
 	j.dropUser = username
+}
+
+// SetChdir configures the working directory the jailed command starts in,
+// as an in-jail (post-chroot) path. chroot(1) leaves the child's cwd at the
+// new root ("/"); ringer's spawn contract requires cwd = taskdir, so the
+// script wraps the final exec in `/bin/sh -c 'cd <dir> && exec …'` when
+// this is set.
+func (j *UnshareJail) SetChdir(dir string) {
+	j.chdir = dir
 }
 
 // Root returns the jail's root directory path.
@@ -132,14 +142,18 @@ func (j *UnshareJail) buildScript(name string, args ...string) string {
 	for _, a := range args {
 		cmdParts = append(cmdParts, shellQuote(a))
 	}
+	target := strings.Join(cmdParts, " ")
+	if j.chdir != "" {
+		// One bash word: the inner sh sees `cd '<dir>' && exec '<cmd>' …`.
+		target = "/bin/sh -c " + shellQuote(fmt.Sprintf("cd %s && exec %s", shellQuote(j.chdir), strings.Join(cmdParts, " ")))
+	}
 	if j.dropUser != "" {
 		// Make all PTY devices accessible before dropping privileges.
 		// runuser changes to a UID that doesn't own the PTY in the namespace.
 		fmt.Fprintf(&sb, "chmod 666 %s/dev/pts/* 2>/dev/null || true\n", shellQuote(root))
-		fmt.Fprintf(&sb, "exec chroot %s runuser -u %s -- %s\n", shellQuote(root),
-			j.dropUser, strings.Join(cmdParts, " "))
+		fmt.Fprintf(&sb, "exec chroot %s runuser -u %s -- %s\n", shellQuote(root), j.dropUser, target)
 	} else {
-		fmt.Fprintf(&sb, "exec chroot %s %s\n", shellQuote(root), strings.Join(cmdParts, " "))
+		fmt.Fprintf(&sb, "exec chroot %s %s\n", shellQuote(root), target)
 	}
 
 	return sb.String()
