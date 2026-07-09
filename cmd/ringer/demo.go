@@ -52,7 +52,7 @@ func buildDemoManifest(workdir string) ([]byte, error) {
 			{
 				Key:         "alpha",
 				Engine:      "mock",
-				Spec:        "MOCK_FILE: alpha.txt\nalpha ready\nMOCK_END\n",
+				Spec:        "Mock task: writes alpha.txt with fixed content; deterministic, no network, zero cost.\nMOCK_FILE: alpha.txt\nalpha ready\nMOCK_END\n",
 				Check:       `test "$(cat alpha.txt)" = "alpha ready"`,
 				ExpectFiles: []string{"alpha.txt"},
 				Verified:    "alpha.txt exists and contains exactly the expected text",
@@ -60,7 +60,8 @@ func buildDemoManifest(workdir string) ([]byte, error) {
 			{
 				Key:    "bravo",
 				Engine: "mock",
-				Spec: "MOCK_FILE: bravo.txt\nbravo ready\nMOCK_END\n" +
+				Spec: "Mock task: writes two files (bravo.txt and bravo2.txt) in a single run; proves multi-file task execution works correctly.\n" +
+					"MOCK_FILE: bravo.txt\nbravo ready\nMOCK_END\n" +
 					"MOCK_FILE: bravo2.txt\nbravo two ready\nMOCK_END\n",
 				Check:       `test "$(cat bravo.txt)" = "bravo ready" && test "$(cat bravo2.txt)" = "bravo two ready"`,
 				ExpectFiles: []string{"bravo.txt", "bravo2.txt"},
@@ -69,7 +70,7 @@ func buildDemoManifest(workdir string) ([]byte, error) {
 			{
 				Key:         "charlie",
 				Engine:      "mock",
-				Spec:        "MOCK_FAIL_ONCE\nMOCK_FILE: charlie.txt\ncharlie ready\nMOCK_END\n",
+				Spec:        "Mock task: fails on first attempt (deterministically, with no side effects), then succeeds on retry; proves failure recovery works.\nMOCK_FAIL_ONCE\nMOCK_FILE: charlie.txt\ncharlie ready\nMOCK_END\n",
 				Check:       `test "$(cat charlie.txt)" = "charlie ready"`,
 				ExpectFiles: []string{"charlie.txt"},
 				Verified:    "charlie.txt exists after a simulated first-attempt failure and retry",
