@@ -11,6 +11,7 @@ import (
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/isolate"
 	"github.com/corruptmemory/ringer/internal/logging"
 	"github.com/corruptmemory/ringer/internal/manifest"
 	"github.com/corruptmemory/ringer/internal/state"
@@ -46,8 +47,9 @@ type Options struct {
 	Identity    string
 	Store       *store.Store // may be nil (skip eval logging)
 	Stdout      io.Writer
-	Logger      logging.Logger // nil -> logging.Default()
-	MaxParallel int            // 0 -> len(tasks)
+	Logger      logging.Logger   // nil -> logging.Default()
+	MaxParallel int              // 0 -> len(tasks)
+	Isolator    isolate.Isolator // required iff any task's engine sets isolation="jail"
 }
 
 // TaskResult is one task's final outcome in a RunResult.
@@ -237,10 +239,16 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		a.setResult(task.Key, "failed", -1, task.Verified, "")
 		return
 	}
-	if engConf.Isolation == "jail" {
-		lg.Errorf("task %s: jail isolation lands in Plan 3", task.Key)
-		a.setResult(task.Key, "failed", -1, task.Verified, "")
-		return
+	var iso isolate.Isolator
+	if engConf.Isolation == "jail" && !task.FullAccess {
+		// Spec §6: full_access: true = no jail (unchanged semantics) — the
+		// task explicitly asked for the unconfined lane.
+		iso = opts.Isolator
+		if iso == nil {
+			lg.Errorf("task %s: isolation=\"jail\" but no isolator was selected (CLI preflight bug)", task.Key)
+			a.setResult(task.Key, "failed", -1, task.Verified, "")
+			return
+		}
 	}
 
 	taskDir := filepath.Join(opts.Manifest.Workdir, task.Key)
@@ -269,6 +277,27 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	var tokens int64 = -1
 	attempts := 0
 
+	// Cleanups collect across every attempt and run once at task end, after
+	// runWorker has returned (the jailed process has fully exited) for the
+	// LAST attempt — running one mid-task, while an earlier attempt's spec
+	// is only relevant for the retry, would still be fine, but running it
+	// before its OWN attempt's runWorker returns would race the namespace
+	// teardown against the still-running process. Deferred here guarantees
+	// "task end," which is always after every attempt's runWorker call has
+	// returned.
+	var cleanups []func() error
+	defer func() {
+		for _, c := range cleanups {
+			if cerr := c(); cerr != nil {
+				lg.Warnf("task %s: isolation cleanup: %v", task.Key, cerr)
+			}
+		}
+	}()
+	repoRO := ""
+	if opts.Manifest.Worktrees {
+		repoRO = opts.Manifest.Repo
+	}
+
 	for attempt := 1; attempt <= 2; attempt++ {
 		attempts = attempt
 		a.setStatus(task.Key, "running", attempt)
@@ -278,9 +307,26 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		// instead of left at its zero default.
 		attemptStart := time.Now()
 		bin, argv := engine.BuildArgv(engConf, taskDir, spec, model, task.EngineArgs, task.FullAccess)
+		var extraEnv []string
+		if iso != nil {
+			wrapped, werr := iso.Wrap(isolate.WrapSpec{
+				Key: task.Key, Bin: bin, Argv: argv, TaskDir: taskDir,
+				StateDirs: engConf.JailStateDirs, ROBinds: engConf.JailRoBinds,
+				RepoRO: repoRO,
+			})
+			if werr != nil {
+				lg.Errorf("task %s: isolate (%s): %v", task.Key, iso.Name(), werr)
+				verdict = "ERROR"
+				break
+			}
+			bin, argv, extraEnv = wrapped.Bin, wrapped.Argv, wrapped.Env
+			if wrapped.Cleanup != nil {
+				cleanups = append(cleanups, wrapped.Cleanup)
+			}
+		}
 		lg.Infof("task %s: attempt %d: %s", task.Key, attempt, bin)
 		w := io.MultiWriter(opts.Stdout, col.sink(task.Key)) // tee live output into the collector
-		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout, nil)
+		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout, extraEnv)
 		if outcome.Err != nil {
 			lg.Errorf("task %s: spawn error: %v", task.Key, outcome.Err)
 		}

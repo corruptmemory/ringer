@@ -11,6 +11,7 @@ import (
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/isolate"
 	"github.com/corruptmemory/ringer/internal/lint"
 	"github.com/corruptmemory/ringer/internal/logging"
 	"github.com/corruptmemory/ringer/internal/manifest"
@@ -111,6 +112,32 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 		return err
 	}
 
+	// Isolation backend: selected once per run, only when some task will
+	// actually jail (spec §6 preflight rule) — a full_access task takes
+	// the unconfined lane and must not trigger selection (or a refusal)
+	// on its own. Selection failures are refusals — precise, actionable,
+	// before any task starts.
+	var iso isolate.Isolator
+	for _, t := range m.Tasks {
+		if t.FullAccess {
+			continue
+		}
+		e, rerr := engine.Resolve(engines, t.Engine)
+		if rerr != nil || e.Isolation != "jail" {
+			continue
+		}
+		self, serr := os.Executable()
+		if serr != nil {
+			return fmt.Errorf("resolve own binary for isolation trampoline: %w", serr)
+		}
+		iso, err = isolate.Select(lg, m.Workdir, self)
+		if err != nil {
+			return err
+		}
+		lg.Infof("isolation backend: %s", iso.Name())
+		break
+	}
+
 	if dryRun {
 		fmt.Fprintf(os.Stdout, "run %q: %d task(s), max_parallel=%d, identity=%s\n",
 			m.RunName, len(m.Tasks), m.MaxParallel, identity)
@@ -131,7 +158,7 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 	res, err := runner.Run(ctx, runner.Options{
 		Manifest: m, Engines: engines, StateDir: cfg.StateDirPath(),
 		Identity: identity, Store: st, Stdout: os.Stdout, Logger: lg,
-		MaxParallel: m.MaxParallel,
+		MaxParallel: m.MaxParallel, Isolator: iso,
 	})
 	if st != nil {
 		// Run-end WAL checkpoint (spec §7, cznic #179): without an explicit
