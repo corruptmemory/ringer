@@ -229,6 +229,11 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	logsDir := filepath.Join(opts.Manifest.Workdir, "logs")
 	_ = os.MkdirAll(logsDir, 0o755)
 	logPath := filepath.Join(logsDir, task.Key+".worker.log")
+	// Append-mode log (ringer.py:7107): clear once per task so a rerun in
+	// the same workdir starts fresh, then both attempts accumulate.
+	if err := os.Remove(logPath); err != nil && !os.IsNotExist(err) {
+		lg.Warnf("task %s: remove stale worker log: %v", task.Key, err)
+	}
 
 	timeoutS := task.TimeoutS
 	if timeoutS == 0 {
@@ -252,7 +257,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		bin, argv := engine.BuildArgv(engConf, taskDir, spec, model, task.EngineArgs, task.FullAccess)
 		lg.Infof("task %s: attempt %d: %s", task.Key, attempt, bin)
 		w := io.MultiWriter(opts.Stdout, col.sink(task.Key)) // tee live output into the collector
-		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout)
+		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout, nil)
 		if outcome.Err != nil {
 			lg.Errorf("task %s: spawn error: %v", task.Key, outcome.Err)
 		}

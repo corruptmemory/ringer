@@ -3,7 +3,9 @@ package runner
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +19,7 @@ func TestRunWorkerCapturesOutputAndExit(t *testing.T) {
 	logPath := filepath.Join(dir, "worker.log")
 	var mirror bytes.Buffer
 
-	out := runWorker(context.Background(), "sh", []string{"-c", "echo hello; exit 7"}, dir, logPath, &mirror, 5*time.Second)
+	out := runWorker(context.Background(), "sh", []string{"-c", "echo hello; exit 7"}, dir, logPath, &mirror, 5*time.Second, nil)
 
 	if out.Err != nil {
 		t.Fatalf("unexpected error: %v", out.Err)
@@ -49,7 +51,7 @@ func TestRunWorkerTimeoutKills(t *testing.T) {
 	var mirror bytes.Buffer
 
 	start := time.Now()
-	out := runWorker(context.Background(), "sleep", []string{"30"}, dir, logPath, &mirror, 200*time.Millisecond)
+	out := runWorker(context.Background(), "sleep", []string{"30"}, dir, logPath, &mirror, 200*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if out.Err != nil {
@@ -81,7 +83,7 @@ func TestRunWorkerTimeoutKillsProcessGroup(t *testing.T) {
 	// (or the grandchild happening to die on its own) lets Wait() return
 	// promptly.
 	start := time.Now()
-	out := runWorker(context.Background(), "sh", []string{"-c", "sleep 30 & exec sleep 30"}, dir, logPath, &mirror, 300*time.Millisecond)
+	out := runWorker(context.Background(), "sh", []string{"-c", "sleep 30 & exec sleep 30"}, dir, logPath, &mirror, 300*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if out.Err != nil {
@@ -119,7 +121,7 @@ func TestRunWorkerTimeoutSIGKILLFallback(t *testing.T) {
 	// Ignoring SIGTERM forces the SIGKILL fallback: the process can only
 	// die once the (shortened) grace period elapses and SIGKILL lands.
 	start := time.Now()
-	out := runWorker(context.Background(), "sh", []string{"-c", `trap "" TERM; sleep 30`}, dir, logPath, &mirror, 200*time.Millisecond)
+	out := runWorker(context.Background(), "sh", []string{"-c", `trap "" TERM; sleep 30`}, dir, logPath, &mirror, 200*time.Millisecond, nil)
 	elapsed := time.Since(start)
 
 	if out.Err != nil {
@@ -150,7 +152,7 @@ func TestRunWorkerClosesStdin(t *testing.T) {
 
 	// If stdin were not closed (backed by /dev/null), `cat` would block forever
 	// waiting for input and the run would time out.
-	out := runWorker(context.Background(), "sh", []string{"-c", "cat; echo done"}, dir, logPath, &mirror, 5*time.Second)
+	out := runWorker(context.Background(), "sh", []string{"-c", "cat; echo done"}, dir, logPath, &mirror, 5*time.Second, nil)
 
 	if out.Err != nil {
 		t.Fatalf("unexpected error: %v", out.Err)
@@ -160,5 +162,63 @@ func TestRunWorkerClosesStdin(t *testing.T) {
 	}
 	if !strings.Contains(mirror.String(), "done") {
 		t.Fatalf("mirror missing %q: %q", "done", mirror.String())
+	}
+}
+
+func TestRunWorkerCanceledNotTimedOut(t *testing.T) {
+	sleepBin, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skipf("sleep not on PATH: %v", err)
+	}
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		cancel()
+	}()
+	start := time.Now()
+	out := runWorker(ctx, sleepBin, []string{"30"}, dir,
+		filepath.Join(dir, "w.log"), io.Discard, 25*time.Second, nil)
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("cancel did not cut the worker short (elapsed %v)", elapsed)
+	}
+	if !out.Canceled {
+		t.Fatalf("outcome = %+v, want Canceled=true", out)
+	}
+	if out.TimedOut {
+		t.Fatalf("outcome = %+v: user cancellation must not be labeled a timeout", out)
+	}
+}
+
+func TestRunWorkerLogAppendsAcrossAttempts(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "w.log")
+	for _, msg := range []string{"attempt-one", "attempt-two"} {
+		out := runWorker(context.Background(), "sh", []string{"-c", "echo " + msg},
+			dir, logPath, io.Discard, 5*time.Second, nil)
+		if out.Err != nil || out.ExitCode != 0 {
+			t.Fatalf("worker failed: %+v", out)
+		}
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "attempt-one") || !strings.Contains(string(data), "attempt-two") {
+		t.Fatalf("log lost an attempt (ringer.py appends both):\n%s", data)
+	}
+}
+
+func TestRunWorkerExtraEnv(t *testing.T) {
+	dir := t.TempDir()
+	var buf bytes.Buffer
+	out := runWorker(context.Background(), "sh", []string{"-c", "printf '%s' \"$RINGER_TEST_MARKER\""},
+		dir, filepath.Join(dir, "w.log"), &buf, 5*time.Second,
+		[]string{"RINGER_TEST_MARKER=isolated-env-ok"})
+	if out.Err != nil || out.ExitCode != 0 {
+		t.Fatalf("worker failed: %+v", out)
+	}
+	if got := buf.String(); got != "isolated-env-ok" {
+		t.Fatalf("env not injected: got %q", got)
 	}
 }
