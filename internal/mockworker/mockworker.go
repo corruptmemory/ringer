@@ -15,6 +15,14 @@ type mockFileBlock struct {
 	content string
 }
 
+// mockFailOnceMarker is the per-taskdir sentinel file MOCK_FAIL_ONCE checks
+// for. This is NOT part of the frozen Python-parity grammar (MOCK_FILE /
+// MOCK_END / MOCK_FAIL) — it is a Go-only test seam, added deliberately (per
+// Plan 2 Task 9's brief) so the runner's fail-then-retry path can be
+// exercised deterministically end-to-end without faking a retry. Kept
+// minimal and additive: MOCK_FAIL_ONCE is inert once the marker exists.
+const mockFailOnceMarker = ".mock-fail-once"
+
 // Run executes the MOCK_FILE/MOCK_END/MOCK_FAIL spec grammar, mirroring
 // engines/mock_worker.py exactly:
 //
@@ -26,6 +34,16 @@ type mockFileBlock struct {
 //     any file is written. An unterminated MOCK_FILE block (MOCK_END never
 //     reached) is a parse error, so it also produces zero filesystem side
 //     effects, matching Python's parse-then-write phasing.
+//
+// A third, Go-only directive, MOCK_FAIL_ONCE, fails exactly the first
+// invocation for a given workDir: on that first call the per-taskdir marker
+// file (mockFailOnceMarker) is absent, so it is created and the run fails
+// with zero other side effects (same contract as MOCK_FAIL). On any
+// subsequent invocation against the same workDir the marker already exists,
+// so MOCK_FAIL_ONCE is treated as absent and processing falls through to
+// normal MOCK_FILE/MOCK_END handling. This lets a caller (the runner's
+// fail-then-retry loop, which re-invokes the worker in the same taskDir)
+// deterministically fail attempt 1 and pass attempt 2.
 func Run(spec, workDir string, stdout, stderr io.Writer) int {
 	lines := strings.Split(spec, "\n")
 
@@ -34,6 +52,25 @@ func Run(spec, workDir string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "mock-worker: simulated failure")
 			return 1
 		}
+	}
+
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "MOCK_FAIL_ONCE" {
+			continue
+		}
+		marker := filepath.Join(workDir, mockFailOnceMarker)
+		if _, err := os.Stat(marker); err == nil {
+			break // marker already present: MOCK_FAIL_ONCE is spent, proceed normally
+		} else if !os.IsNotExist(err) {
+			fmt.Fprintf(stderr, "mock-worker: %v\n", err)
+			return 1
+		}
+		if err := os.WriteFile(marker, nil, 0o644); err != nil {
+			fmt.Fprintf(stderr, "mock-worker: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stderr, "mock-worker: simulated failure (once)")
+		return 1
 	}
 
 	blocks, err := parseBlocks(lines)

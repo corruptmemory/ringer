@@ -40,6 +40,41 @@ func TestRunRejectsPathEscape(t *testing.T) {
 	}
 }
 
+// TestRunFailOnceThenSucceeds proves the Go-only MOCK_FAIL_ONCE test seam:
+// the first Run against a workDir fails with zero filesystem side effects
+// (mirroring MOCK_FAIL's contract) and leaves a marker file; a second Run
+// against the SAME workDir with the SAME spec treats MOCK_FAIL_ONCE as spent
+// and falls through to normal MOCK_FILE/MOCK_END processing.
+func TestRunFailOnceThenSucceeds(t *testing.T) {
+	dir := t.TempDir()
+	spec := "MOCK_FAIL_ONCE\nMOCK_FILE: out.txt\nhello\nMOCK_END\n"
+
+	var errb1 bytes.Buffer
+	code := Run(spec, dir, &bytes.Buffer{}, &errb1)
+	if code != 1 {
+		t.Fatalf("attempt 1: exit = %d, want 1", code)
+	}
+	if !bytes.Contains(errb1.Bytes(), []byte("simulated failure")) {
+		t.Errorf("attempt 1: stderr = %q", errb1.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out.txt")); !os.IsNotExist(err) {
+		t.Errorf("attempt 1: out.txt should not exist, stat err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, mockFailOnceMarker)); err != nil {
+		t.Errorf("attempt 1: marker file not created: %v", err)
+	}
+
+	var errb2 bytes.Buffer
+	code = Run(spec, dir, &bytes.Buffer{}, &errb2)
+	if code != 0 {
+		t.Fatalf("attempt 2: exit = %d, want 0, stderr = %q", code, errb2.String())
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "out.txt"))
+	if err != nil || string(got) != "hello\n" {
+		t.Fatalf("attempt 2: out.txt = %q, err %v", got, err)
+	}
+}
+
 func TestRunGrammarEdgeCases(t *testing.T) {
 	tests := []struct {
 		name       string
