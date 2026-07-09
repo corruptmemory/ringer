@@ -133,6 +133,14 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 		Identity: identity, Store: st, Stdout: os.Stdout, Logger: lg,
 		MaxParallel: m.MaxParallel,
 	})
+	if st != nil {
+		// Run-end WAL checkpoint (spec §7, cznic #179): without an explicit
+		// TRUNCATE checkpoint the WAL grows without bound under modernc.
+		// Non-fatal — the data is durable either way — but never silent.
+		if cerr := st.Checkpoint(); cerr != nil {
+			lg.Warnf("eval store checkpoint: %v", cerr)
+		}
+	}
 	if err != nil {
 		return err
 	}

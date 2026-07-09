@@ -20,6 +20,22 @@ import (
 
 const defaultTimeoutS = 900
 
+// failureContextMax caps the check output appended to a retry spec, in
+// bytes; mirrors ringer.py build_failure_context's 6000-char cap
+// (ringer.py:7671). The spec travels as ONE argv element, and Linux caps a
+// single argument at MAX_ARG_STRLEN (~128KiB) — an uncapped check output
+// would make the retry spawn fail with E2BIG.
+const failureContextMax = 6000
+
+// capTail returns at most max trailing bytes of s — the most recent output
+// is the actionable part of a failure log.
+func capTail(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[len(s)-max:]
+}
+
 // Options configures a Run. Store may be nil to skip eval logging; Logger nil
 // falls back to logging.Default(); MaxParallel <= 0 means "unbounded" (one
 // goroutine per task).
@@ -309,7 +325,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		}
 		if attempt == 1 {
 			// Inject failure context into the spec for the retry.
-			spec = task.Spec + "\n\n--- Previous attempt failed. Check output:\n" + vres.Output
+			spec = task.Spec + "\n\n--- Previous attempt failed. Check output:\n" + capTail(vres.Output, failureContextMax)
 			lg.Warnf("task %s: attempt 1 %s; retrying", task.Key, verdict)
 		}
 	}

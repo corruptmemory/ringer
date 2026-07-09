@@ -381,3 +381,17 @@ func TestRunInterruptedTearsDownCleanly(t *testing.T) {
 		t.Fatal("active-runs.json still lists the interrupted run")
 	}
 }
+
+func TestCapTail(t *testing.T) {
+	if got := capTail("short", 6000); got != "short" {
+		t.Fatalf("short input mangled: %q", got)
+	}
+	long := strings.Repeat("x", 7000) + "TAIL-MARKER"
+	got := capTail(long, 6000)
+	if len(got) != 6000 {
+		t.Fatalf("len = %d, want 6000", len(got))
+	}
+	if !strings.HasSuffix(got, "TAIL-MARKER") {
+		t.Fatal("cap must keep the TAIL (most recent output is the actionable part)")
+	}
+}
