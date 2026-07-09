@@ -17,7 +17,7 @@
 - No new third-party dependencies. Everything is stdlib + the four deps already present.
 - **The four frozen spawn invariants (design §9.8), non-negotiable in the runner:** (1) stdin is always closed (`/dev/null`); (2) sandbox mode is always explicit (here: `isolation=none` is explicit — no implicit default sandbox); (3) verification executes the artifact (exit 0 is the only PASS); (4) logs carry raw worker output only, never a summary.
 - **Frozen manifest JSON schema** (design §9.1): task fields `key, spec, check, engine, model, expect_files, timeout_s, full_access, engine_args, verified, task_type`; run-level `run_name, workdir, max_parallel, worktrees, repo, tasks`. Worktrees mode is parsed/validated but its execution is deferred to Plan 3 (a manifest with `worktrees:true` must error clearly in Plan 2: "worktrees mode lands in Plan 3").
-- **Frozen engine spawn contract** (design §9.3): argv = `bin` + expanded `args_template`; placeholders `{taskdir} {spec} {model}` string-substituted, `{engine_args} {access_args} {sandbox_args} {full_access_args}` list-spliced; cwd = taskdir; stdin `/dev/null`; stdout+stderr merged, teed to `<workdir>/logs/<key>.worker.log` + a 1MB ring buffer + ringer's own stdout; token count scraped from the tail via the engine's `token_regex`.
+- **Frozen engine spawn contract** (design §9.3): argv = `bin` + expanded `args_template`; placeholders `{taskdir} {spec} {model}` string-substituted, `{engine_args} {access_args} {sandbox_args} {full_access_args}` list-spliced; cwd = taskdir; stdin `/dev/null`; stdout+stderr merged, teed to `<workdir>/logs/<key>.worker.log` + ringer's own stdout + a per-task sink into the run's **output-collector actor** (bounded, chunk-granular per-task tails — not a fixed ring buffer); token count scraped from that tail via the engine's `token_regex`.
 - **Frozen on-disk formats** (design §9.4): run-state JSON at `<state_dir>/runs/<run_id>.json`; `<state_dir>/active-runs.json`. These must match what a future HUD (Plan 4) and the existing Python Ringside expect — the schema is defined in Task 5 and is authoritative once set.
 - **Eval rows** go to the SQLite store via Plan 1's `store.InsertAttempt` — one row per attempt, using the frozen columns.
 - `isolation=none` only. Any engine config with `isolation="jail"` must preflight-fail with "jail isolation lands in Plan 3" (config already validates the *value*; the runner rejects *using* it).
@@ -1382,11 +1382,11 @@ git commit -m "feat: internal/logging — always-on leveled slog seam, [logging]
 
 ---
 
-### Task 7: Runner — actor-owned state
+### Task 7: Runner — actor-owned state (run-state actor + output-collector actor)
 
 **Files:**
-- Create: `internal/runner/actor.go`
-- Test: `internal/runner/actor_test.go`
+- Create: `internal/runner/actor.go`, `internal/runner/collector.go`
+- Test: `internal/runner/actor_test.go`, `internal/runner/collector_test.go`
 
 **Interfaces:**
 - Consumes: `state.TaskView`, `state.RunState` (Task 5); `logging.Logger` (Task 6).
@@ -1410,6 +1410,19 @@ func (a *actor) snapshot() state.RunState                // synchronous request/
 ```
 
 All mutation goes through the command channel; `snapshot()` sends a reply channel and blocks for the response. This is the single-owner pattern — no mutex on the task map.
+
+This task also delivers a **second, sibling actor — the output-collector** (`collector.go`), kept separate from the run-state actor on purpose: its traffic is bimodal (high-frequency fire-and-forget chunk appends + occasional request-reply tail reads), which must not share the run-state actor's all-synchronous channel or compete with its 1s snapshot. One buffered command channel carries both append-closures and tail-closures — a single FIFO so a `tail()` always sees every append that preceded it (two channels would let a read race ahead of buffered writes). Same lifecycle discipline as the run-state actor: recover-guarded `stop`, `WaitGroup` `wait`, drain-then-exit so a worker's final output burst isn't lost.
+
+```go
+// The output-collector: run-scoped owner of bounded, chunk-granular per-task
+// output tails. Workers forward output via sink (fire-and-forget); readers
+// (token scraping now, live HUD later) call tail (request-reply).
+func newCollector(capPerTask int) *collector
+func (c *collector) start()
+func (c *collector) sink(key string) io.Writer            // per-task forwarding writer (copies p, async-sends)
+func (c *collector) tail(key string, limitBytes int) string
+func (c *collector) stopAndWait()                         // drain-then-exit
+```
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1575,6 +1588,366 @@ git add internal/runner/actor.go internal/runner/actor_test.go
 git commit -m "feat: runner actor — single-owner run state, no mutex"
 ```
 
+**Second component — the output-collector actor** (compile-verified alongside the worker, green under `--race`: no-stale-tail ordering, bounded eviction, reverse-walk limit, concurrent-writer race, drain-on-stop).
+
+- [ ] **Step 6: Write the failing collector tests** — `internal/runner/collector_test.go`:
+
+```go
+package runner
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestCollectorOrderingNoStaleTail proves a tail can't race ahead of the
+// appends that preceded it: writes happen synchronously on the test
+// goroutine (so their order is well-defined), and an immediately-following
+// tail() must see all of them. This is the whole reason for using one FIFO
+// command channel instead of separate append/tail channels.
+func TestCollectorOrderingNoStaleTail(t *testing.T) {
+	c := newCollector(1 << 20)
+	c.start()
+	defer c.stopAndWait()
+
+	sink := c.sink("k")
+	writes := []string{"alpha", "bravo", "charlie", "delta"}
+	for _, w := range writes {
+		if _, err := sink.Write([]byte(w)); err != nil {
+			t.Fatalf("write(%q): %v", w, err)
+		}
+	}
+
+	want := strings.Join(writes, "")
+	got := c.tail("k", 1<<20)
+	if got != want {
+		t.Fatalf("tail = %q, want %q", got, want)
+	}
+}
+
+// TestCollectorBoundedEviction writes far more than capPerTask and checks
+// the tail is bounded near the cap, is a true suffix of the full stream
+// (newest bytes present, in order), and is strictly shorter than the full
+// stream (oldest bytes evicted).
+func TestCollectorBoundedEviction(t *testing.T) {
+	const capPerTask = 100
+	c := newCollector(capPerTask)
+	c.start()
+	defer c.stopAndWait()
+
+	sink := c.sink("k")
+	var full strings.Builder
+	for i := 0; i < 50; i++ { // 50 * 10 = 500 bytes, far more than capPerTask
+		chunk := strings.Repeat(string(rune('a'+i%26)), 10)
+		full.WriteString(chunk)
+		if _, err := sink.Write([]byte(chunk)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	want := full.String()
+	got := c.tail("k", 1<<20) // ask for far more than capPerTask
+
+	if got == "" {
+		t.Fatal("tail returned empty after many writes")
+	}
+	if !strings.HasSuffix(want, got) {
+		t.Fatalf("tail %q is not a suffix of the full stream %q", got, want)
+	}
+	if len(got) >= len(want) {
+		t.Fatalf("tail was not bounded: got %d bytes, full stream was %d bytes", len(got), len(want))
+	}
+	if len(got) > capPerTask+10 { // allow slop of at most one 10-byte chunk over cap
+		t.Fatalf("tail exceeds capPerTask by more than one chunk: %d bytes (cap=%d)", len(got), capPerTask)
+	}
+}
+
+// TestCollectorTailLimitReverseWalk checks the newest-first reverse walk
+// returns exactly the last limitBytes bytes, even when that cut point falls
+// in the middle of a chunk.
+func TestCollectorTailLimitReverseWalk(t *testing.T) {
+	c := newCollector(1 << 20)
+	c.start()
+	defer c.stopAndWait()
+
+	sink := c.sink("k")
+	for _, w := range []string{"AAAAA", "BBBBB", "CCCCC"} {
+		if _, err := sink.Write([]byte(w)); err != nil {
+			t.Fatalf("write(%q): %v", w, err)
+		}
+	}
+
+	const want = "BBCCCCC" // last 7 of "AAAAABBBBBCCCCC"
+	got := c.tail("k", 7)
+	if got != want {
+		t.Fatalf("tail(7) = %q, want %q", got, want)
+	}
+}
+
+// TestCollectorConcurrentWritersRace exercises many goroutines writing to
+// distinct keys concurrently with another goroutine polling tail — this is
+// the point of the single-owner goroutine design, and must pass under -race.
+func TestCollectorConcurrentWritersRace(t *testing.T) {
+	c := newCollector(4096)
+	c.start()
+	defer c.stopAndWait()
+
+	const goroutines = 8
+	const writesPerGoroutine = 200
+
+	done := make(chan struct{})
+	for g := 0; g < goroutines; g++ {
+		go func(id int) {
+			defer func() { done <- struct{}{} }()
+			key := fmt.Sprintf("task-%d", id)
+			sink := c.sink(key)
+			for i := 0; i < writesPerGoroutine; i++ {
+				if _, err := sink.Write([]byte("x")); err != nil {
+					t.Errorf("write: %v", err)
+					return
+				}
+			}
+		}(g)
+	}
+
+	stopReader := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stopReader:
+				return
+			default:
+				_ = c.tail("task-0", 64)
+			}
+		}
+	}()
+
+	for g := 0; g < goroutines; g++ {
+		<-done
+	}
+	close(stopReader)
+	<-readerDone
+
+	got := c.tail("task-0", writesPerGoroutine*2)
+	if len(got) != writesPerGoroutine {
+		t.Fatalf("task-0 tail length = %d, want %d", len(got), writesPerGoroutine)
+	}
+}
+
+// TestCollectorDrainOnStop proves the owner drains buffered commands before
+// exiting (a worker's final burst isn't lost just because stop() raced ahead
+// of processing), and that stop() is safely idempotent.
+func TestCollectorDrainOnStop(t *testing.T) {
+	c := newCollector(1 << 20)
+	c.start()
+
+	const n = 50
+	results := make(chan int, n)
+	for i := 0; i < n; i++ {
+		i := i
+		c.cmds <- func() { results <- i }
+	}
+
+	// Stop immediately; the owner must drain the n buffered closures above
+	// before exiting rather than dropping them.
+	c.stopAndWait()
+
+	if len(results) != n {
+		t.Fatalf("drain-then-exit dropped closures: got %d of %d", len(results), n)
+	}
+
+	// Double stop must be a safe no-op.
+	c.stop()
+
+	stopAgain := make(chan struct{})
+	go func() {
+		c.stopAndWait()
+		close(stopAgain)
+	}()
+	select {
+	case <-stopAgain:
+	case <-time.After(2 * time.Second):
+		t.Fatal("second stopAndWait() did not return promptly")
+	}
+}
+
+// TestCollectorTailUnknownKey checks tail on a never-written key returns ""
+// rather than panicking or blocking.
+func TestCollectorTailUnknownKey(t *testing.T) {
+	c := newCollector(1 << 20)
+	c.start()
+	defer c.stopAndWait()
+
+	if got := c.tail("nope", 100); got != "" {
+		t.Fatalf("tail(unknown) = %q, want empty", got)
+	}
+}
+```
+
+- [ ] **Step 7: Run to verify fail** — `./build.sh --test`.
+
+- [ ] **Step 8: Implement** `internal/runner/collector.go`:
+
+```go
+package runner
+
+import (
+	"io"
+	"sync"
+)
+
+// collector is the run-scoped owner of per-task worker output tails. Workers
+// forward chunks via sink (fire-and-forget); readers call tail (request-reply).
+// A single owner goroutine drains one buffered command channel carrying BOTH
+// append-closures and tail-closures — one FIFO channel (not two) so a tail
+// always sees every append that preceded it. Lifecycle mirrors the run's
+// actor: recover-guarded stop, WaitGroup wait, drain-then-exit.
+type collector struct {
+	capPerTask int
+	cmds       chan func()
+	quit       chan struct{}
+	wg         sync.WaitGroup
+	tails      map[string]*taskTail // owned solely by run()
+}
+
+// taskTail is a bounded, chunk-granular FIFO of recent output for one task.
+type taskTail struct {
+	chunks [][]byte
+	bytes  int
+}
+
+func newCollector(capPerTask int) *collector {
+	return &collector{
+		capPerTask: capPerTask,
+		cmds:       make(chan func(), 256),
+		quit:       make(chan struct{}),
+		tails:      map[string]*taskTail{},
+	}
+}
+
+func (c *collector) start() {
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		for {
+			select {
+			case fn := <-c.cmds:
+				fn()
+			case <-c.quit:
+				// drain-then-exit: absorb buffered chunks so a worker's final
+				// burst isn't lost, then exit.
+				for {
+					select {
+					case fn := <-c.cmds:
+						fn()
+					default:
+						return
+					}
+				}
+			}
+		}
+	}()
+}
+
+func (c *collector) append(key string, data []byte) {
+	t := c.tails[key]
+	if t == nil {
+		t = &taskTail{}
+		c.tails[key] = t
+	}
+	t.chunks = append(t.chunks, data)
+	t.bytes += len(data)
+	for t.bytes > c.capPerTask && len(t.chunks) > 1 {
+		t.bytes -= len(t.chunks[0])
+		t.chunks[0] = nil // drop the reference so the evicted chunk's backing
+		// array is collectible; slicing alone leaves a stale pointer to it
+		// live in t.chunks' own backing array until the next growth.
+		t.chunks = t.chunks[1:]
+	}
+}
+
+// sink returns an io.Writer forwarding this task's output to the collector.
+// It copies each write (the caller reuses the slice) and sends async.
+func (c *collector) sink(key string) io.Writer { return &collectorSink{c: c, key: key} }
+
+type collectorSink struct {
+	c   *collector
+	key string
+}
+
+func (s *collectorSink) Write(p []byte) (int, error) {
+	b := make([]byte, len(p))
+	copy(b, p)
+	key := s.key
+	select {
+	case s.c.cmds <- func() { s.c.append(key, b) }:
+	case <-s.c.quit:
+	}
+	return len(p), nil
+}
+
+// tail returns up to limitBytes of the most recent output for key, in order.
+func (c *collector) tail(key string, limitBytes int) string {
+	reply := make(chan string, 1)
+	select {
+	case c.cmds <- func() { reply <- c.assembleTail(key, limitBytes) }:
+		select {
+		case s := <-reply:
+			return s
+		case <-c.quit:
+			return ""
+		}
+	case <-c.quit:
+		return ""
+	}
+}
+
+func (c *collector) assembleTail(key string, limitBytes int) string {
+	t := c.tails[key]
+	if t == nil {
+		return ""
+	}
+	var b []byte
+	total := 0
+	// Walk chunks newest-first until we have >= limitBytes, collecting indices.
+	start := len(t.chunks)
+	for i := len(t.chunks) - 1; i >= 0; i-- {
+		start = i
+		total += len(t.chunks[i])
+		if total >= limitBytes {
+			break
+		}
+	}
+	for i := start; i < len(t.chunks); i++ {
+		b = append(b, t.chunks[i]...)
+	}
+	if len(b) > limitBytes {
+		b = b[len(b)-limitBytes:]
+	}
+	return string(b)
+}
+
+func (c *collector) stop() {
+	defer func() { _ = recover() }() // idempotent double-stop, see actor-pattern lifecycle
+	close(c.quit)
+}
+func (c *collector) wait()        { c.wg.Wait() }
+func (c *collector) stopAndWait() { c.stop(); c.wait() }
+```
+
+- [ ] **Step 9: Run to verify pass under race** — `./build.sh --test --race`. Expected: PASS, no races.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add internal/runner/collector.go internal/runner/collector_test.go
+git commit -m "feat: runner output-collector actor — bounded per-task tails, drain-then-exit"
+```
+
 ---
 
 ### Task 8: Runner — worker execution (spawn, tee, timeout, kill)
@@ -1593,13 +1966,14 @@ package runner
 type WorkerOutcome struct {
 	ExitCode int
 	TimedOut bool
-	Tail     string // last ~1MB of combined output (for token scraping + failure context)
 	Err      error
 }
 
 // runWorker spawns bin+argv in taskDir with the frozen invariants:
 // stdin=/dev/null, stderr merged into stdout, new process group (Setpgid),
-// output teed to logPath + a 1MB ring buffer + w (usually os.Stdout).
+// output teed to logPath + w. The caller composes w (e.g. io.MultiWriter of
+// os.Stdout + the collector's per-task sink), so runWorker holds no tail
+// buffer — recent output lives in the output-collector (Task 7).
 // On ctx cancel/timeout: SIGTERM the group, 5s grace, then SIGKILL.
 func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath string, w io.Writer, timeout time.Duration) WorkerOutcome
 ```
@@ -1607,7 +1981,6 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 - [ ] **Step 1: Write the failing tests** (use `/bin/sh -c` as a stand-in worker):
 
 ```go
-// internal/runner/worker_test.go
 package runner
 
 import (
@@ -1621,57 +1994,88 @@ import (
 )
 
 func TestRunWorkerCapturesOutputAndExit(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
-	log := filepath.Join(dir, "w.log")
+	logPath := filepath.Join(dir, "worker.log")
 	var mirror bytes.Buffer
-	out := runWorker(context.Background(), "sh", []string{"-c", "echo hello; exit 7"}, dir, log, &mirror, 10*time.Second)
+
+	out := runWorker(context.Background(), "sh", []string{"-c", "echo hello; exit 7"}, dir, logPath, &mirror, 5*time.Second)
+
+	if out.Err != nil {
+		t.Fatalf("unexpected error: %v", out.Err)
+	}
+	if out.TimedOut {
+		t.Fatalf("expected TimedOut=false")
+	}
 	if out.ExitCode != 7 {
-		t.Errorf("exit = %d, want 7", out.ExitCode)
+		t.Fatalf("expected ExitCode=7, got %d", out.ExitCode)
 	}
-	if !strings.Contains(out.Tail, "hello") {
-		t.Errorf("tail missing output: %q", out.Tail)
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("reading log file: %v", err)
 	}
-	logData, _ := os.ReadFile(log)
-	if !strings.Contains(string(logData), "hello") {
-		t.Errorf("log file missing output: %q", logData)
+	if !strings.Contains(string(logBytes), "hello") {
+		t.Fatalf("log file missing %q: %q", "hello", string(logBytes))
 	}
 	if !strings.Contains(mirror.String(), "hello") {
-		t.Errorf("mirror missing output: %q", mirror.String())
+		t.Fatalf("mirror missing %q: %q", "hello", mirror.String())
 	}
 }
 
 func TestRunWorkerTimeoutKills(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
+	logPath := filepath.Join(dir, "worker.log")
+	var mirror bytes.Buffer
+
 	start := time.Now()
-	out := runWorker(context.Background(), "sh", []string{"-c", "sleep 30"}, dir, filepath.Join(dir, "w.log"), &bytes.Buffer{}, 300*time.Millisecond)
-	if !out.TimedOut {
-		t.Errorf("expected timeout, got %+v", out)
+	out := runWorker(context.Background(), "sleep", []string{"30"}, dir, logPath, &mirror, 200*time.Millisecond)
+	elapsed := time.Since(start)
+
+	if out.Err != nil {
+		t.Fatalf("unexpected error: %v", out.Err)
 	}
-	if time.Since(start) > 10*time.Second {
-		t.Errorf("kill took too long: %v", time.Since(start))
+	if !out.TimedOut {
+		t.Fatalf("expected TimedOut=true, got outcome %+v", out)
+	}
+	// sleep responds to SIGTERM immediately, so we shouldn't need the 5s grace
+	// period before SIGKILL. Comfortably under that bound proves SIGTERM did it.
+	if elapsed >= 5*time.Second {
+		t.Fatalf("expected SIGTERM to kill well under the grace period, took %s", elapsed)
 	}
 }
 
 func TestRunWorkerClosesStdin(t *testing.T) {
-	// A worker that reads stdin must see EOF immediately, not hang.
+	t.Parallel()
+
 	dir := t.TempDir()
-	out := runWorker(context.Background(), "sh", []string{"-c", "cat; echo done"}, dir, filepath.Join(dir, "w.log"), &bytes.Buffer{}, 5*time.Second)
-	if out.TimedOut || !strings.Contains(out.Tail, "done") {
-		t.Errorf("stdin not closed (worker hung?): %+v", out)
+	logPath := filepath.Join(dir, "worker.log")
+	var mirror bytes.Buffer
+
+	// If stdin were not closed (backed by /dev/null), `cat` would block forever
+	// waiting for input and the run would time out.
+	out := runWorker(context.Background(), "sh", []string{"-c", "cat; echo done"}, dir, logPath, &mirror, 5*time.Second)
+
+	if out.Err != nil {
+		t.Fatalf("unexpected error: %v", out.Err)
+	}
+	if out.TimedOut {
+		t.Fatalf("expected TimedOut=false; stdin was not closed promptly")
+	}
+	if !strings.Contains(mirror.String(), "done") {
+		t.Fatalf("mirror missing %q: %q", "done", mirror.String())
 	}
 }
 ```
 
 - [ ] **Step 2: Run to verify fail** — `./build.sh --test`.
 
-- [ ] **Step 3: Implement** `internal/runner/worker.go` (the code below is compile-verified and green under `--race`). Notes: `exec.CommandContext` kills only the leader, so build `*exec.Cmd` manually with `Setpgid`; because `Stdout`/`Stderr` are an `io.MultiWriter` (not an `*os.File`), `os/exec`'s own output-copy goroutines are joined by `cmd.Wait()`, so `ring.Tail()` read after Wait is race-free with no hand-rolled `io.Copy`. `runWorker` takes no logger — it returns a `WorkerOutcome`; the caller (Task 9) does the logging.
+- [ ] **Step 3: Implement** `internal/runner/worker.go` (compile-verified, green under `--race`). Notes: `exec.CommandContext` kills only the leader, so build `*exec.Cmd` manually with `Setpgid`; because `Stdout`/`Stderr` are an `io.MultiWriter` (not an `*os.File`), `os/exec`'s own copy goroutines are joined by `cmd.Wait()`, so the outcome is settled race-free with no hand-rolled `io.Copy`. No ring buffer and no `Tail` field — the tee's `w` is composed by the caller (Task 9) as `MultiWriter(os.Stdout, collector.sink(key))`, so recent output lives in the collector; `runWorker` takes no logger and returns a `WorkerOutcome`.
 
 ```go
-// Package runner spawns worker subprocesses with the frozen process
-// lifecycle invariants described in the project design (§9): closed stdin,
-// merged stdout/stderr, a dedicated process group so the whole tree can be
-// signalled, and tee'd output capture with a bounded tail for token
-// scraping and failure context.
 package runner
 
 import (
@@ -1679,83 +2083,25 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sync"
 	"syscall"
 	"time"
 )
 
-// ringBufferSize is the fixed capacity of the ring buffer used to retain
-// the tail of a worker's combined output.
-const ringBufferSize = 1 << 20 // 1MB
-
-// ringBuffer is a fixed-size io.Writer that retains only the most recently
-// written ringBufferSize bytes, overwriting the oldest data (wraparound).
-type ringBuffer struct {
-	mu   sync.Mutex
-	buf  [ringBufferSize]byte
-	pos  int  // next write offset within buf
-	full bool // true once buf has wrapped at least once
-}
-
-func (r *ringBuffer) Write(p []byte) (int, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	n := len(p)
-	if n == 0 {
-		return 0, nil
-	}
-	if n >= ringBufferSize {
-		copy(r.buf[:], p[n-ringBufferSize:])
-		r.pos = 0
-		r.full = true
-		return n, nil
-	}
-	end := r.pos + n
-	if end <= ringBufferSize {
-		copy(r.buf[r.pos:end], p)
-		r.pos = end
-		if r.pos == ringBufferSize {
-			r.pos = 0
-			r.full = true
-		}
-	} else {
-		first := ringBufferSize - r.pos
-		copy(r.buf[r.pos:], p[:first])
-		copy(r.buf[:end-ringBufferSize], p[first:])
-		r.pos = end - ringBufferSize
-		r.full = true
-	}
-	return n, nil
-}
-
-// Tail returns the buffered contents in chronological order (oldest first).
-func (r *ringBuffer) Tail() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if !r.full {
-		out := make([]byte, r.pos)
-		copy(out, r.buf[:r.pos])
-		return string(out)
-	}
-	out := make([]byte, ringBufferSize)
-	copy(out, r.buf[r.pos:])
-	copy(out[ringBufferSize-r.pos:], r.buf[:r.pos])
-	return string(out)
-}
-
-// WorkerOutcome describes how a worker subprocess finished.
+// WorkerOutcome reports how a worker process finished.
 type WorkerOutcome struct {
 	ExitCode int
 	TimedOut bool
-	Tail     string // last ~1MB of combined output (for token scraping + failure context)
 	Err      error
 }
 
-// runWorker spawns bin+argv in taskDir with the frozen invariants:
-// stdin=/dev/null, stderr merged into stdout, new process group (Setpgid),
-// output teed to logPath + a 1MB ring buffer + w (usually os.Stdout).
-// On ctx cancel/timeout: SIGTERM the group, 5s grace, then SIGKILL.
+// runWorker executes bin with argv in taskDir. Stdin is closed (backed by
+// /dev/null); stdout and stderr are merged and teed to a log file at
+// logPath and to the caller-supplied writer w (the caller composes w, e.g.
+// via io.MultiWriter, to also forward output to a collector sink). The
+// process runs in its own process group (Setpgid) so that on timeout the
+// whole group can be signaled: SIGTERM first, then SIGKILL after a 5s grace
+// period if it hasn't exited. cmd.Wait() joins os/exec's internal copy
+// goroutines, so once it returns all writes to w have completed.
 func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath string, w io.Writer, timeout time.Duration) WorkerOutcome {
 	devNull, err := os.Open(os.DevNull)
 	if err != nil {
@@ -1769,8 +2115,7 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 	}
 	defer logFile.Close()
 
-	ring := &ringBuffer{}
-	mw := io.MultiWriter(logFile, ring, w)
+	mw := io.MultiWriter(logFile, w)
 
 	cmd := exec.Command(bin, argv...)
 	cmd.Dir = taskDir
@@ -1780,19 +2125,13 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {
-		return WorkerOutcome{Err: err, Tail: ring.Tail()}
+		return WorkerOutcome{Err: err}
 	}
-
-	// Setpgid without an explicit Pgid makes the child the leader of its own
-	// new process group, so its pid doubles as the group id.
 	pgid := cmd.Process.Pid
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// cmd.Wait also joins the internal goroutines os/exec uses to copy
-	// Stdout/Stderr into mw (since mw isn't an *os.File), so once waitErr is
-	// received all writes into ring have happened and Tail() is race-free.
 	waitDone := make(chan error, 1)
 	go func() { waitDone <- cmd.Wait() }()
 
@@ -1811,7 +2150,7 @@ func runWorker(ctx context.Context, bin string, argv []string, taskDir, logPath 
 		}
 	}
 
-	outcome := WorkerOutcome{TimedOut: timedOut, Tail: ring.Tail()}
+	outcome := WorkerOutcome{TimedOut: timedOut}
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			outcome.ExitCode = exitErr.ExitCode()
@@ -1841,7 +2180,7 @@ git commit -m "feat: runner worker spawn — frozen invariants (stdin closed, pg
 - Test: `internal/runner/runner_test.go` (E2E through the mock engine)
 
 **Interfaces:**
-- Consumes: everything so far — `manifest`, `engine`, `verify`, `state`, `store`, `logging` (T6), the actor (T7), `runWorker` (T8).
+- Consumes: everything so far — `manifest`, `engine`, `verify`, `state`, `store`, `logging` (T6), the actor + output-collector (T7), `runWorker` (T8).
 - Produces:
 
 ```go
@@ -1998,6 +2337,10 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	a.start()
 	defer a.stopAndWait()
 
+	col := newCollector(256 << 10) // 256KB recent output per task (token scrape now, live HUD later)
+	col.start()
+	defer col.stopAndWait()
+
 	_ = state.RegisterActiveRun(opts.StateDir, runID, os.Getpid(), m.RunName, opts.Identity, startedAt)
 	defer func() { _ = state.UnregisterActiveRun(opts.StateDir, runID) }()
 
@@ -2041,7 +2384,7 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			runTask(ctx, opts, a, lg, runID, task)
+			runTask(ctx, opts, a, col, lg, runID, task)
 		}(task)
 	}
 	wg.Wait()
@@ -2065,7 +2408,7 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 }
 
 // runTask runs one manifest task through up to two attempts.
-func runTask(ctx context.Context, opts Options, a *actor, lg logging.Logger, runID string, task manifest.Task) {
+func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg logging.Logger, runID string, task manifest.Task) {
 	engineName := task.Engine
 	if engineName == "" {
 		engineName = "codex"
@@ -2113,11 +2456,12 @@ func runTask(ctx context.Context, opts Options, a *actor, lg logging.Logger, run
 
 		bin, argv := engine.BuildArgv(engConf, taskDir, spec, model, task.EngineArgs, task.FullAccess)
 		lg.Infof("task %s: attempt %d: %s", task.Key, attempt, bin)
-		outcome := runWorker(ctx, bin, argv, taskDir, logPath, opts.Stdout, timeout)
+		w := io.MultiWriter(opts.Stdout, col.sink(task.Key)) // tee live output into the collector
+		outcome := runWorker(ctx, bin, argv, taskDir, logPath, w, timeout)
 		if outcome.Err != nil {
 			lg.Errorf("task %s: spawn error: %v", task.Key, outcome.Err)
 		}
-		tokens = scrapeTokens(engConf.TokenRegex, outcome.Tail)
+		tokens = scrapeTokens(engConf.TokenRegex, col.tail(task.Key, 64<<10)) // scrape the post-exit tail
 
 		vres := verify.Verify(ctx, taskDir, task.Check, task.ExpectFiles, timeout)
 		switch {
@@ -2433,6 +2777,6 @@ Not a coding task — the controller runs the final whole-branch review (opus) o
 ## Self-Review (completed at write time)
 
 - **Spec coverage (Plan 2 scope):** logging seam → Task 6; run path §5 → Tasks 7-9; engine spawn contract §9.3 → Tasks 2,8; manifest schema §9.1 → Task 1; verify §5 → Task 4; on-disk state §9.4 → Task 5; eval rows → Task 9 (via Plan 1 store); mock-worker → Task 3; lint → Task 10; demo → Task 11; CLI surface §3 (run/lint/demo/mock-worker) → Tasks 3,9,10,11. Deferred by design: isolation/jail (Plan 3), HUD/artifacts (Plan 4), models/catalog/scoreboard + Python cutover (Plan 5), worktrees mode (Plan 3).
-- **Placeholders:** Tasks 1-9 now have complete code — including the two large runner tasks (worker spawn T8, task loop + `run` subcommand T9). The logging package (T6) and the worker (T8) were compile-verified in isolated worktrees (`./build.sh --test`, worker also `--race`) before their code landed here; the runner (T9) is authored against those verified signatures but can only be fully compiled once T1–T8 exist, so its first real build is during execution. Only Tasks 10-11 (lint, demo) still specify interfaces + tests + the non-obvious mechanics in prose where the code is long; the implementer writes those mechanical bodies against the given tests, and the subagent review loop covers the fill-in.
+- **Placeholders:** Tasks 1-9 now have complete code — including the two large runner tasks (worker spawn T8, task loop + `run` subcommand T9). The logging package (T6), the output-collector (T7), and the worker (T8) were compile-verified in isolated worktrees (`./build.sh --test`; collector and worker also `--race`) before their code landed here; the run-state actor (T7) and the runner (T9) are authored against those verified signatures but can only be fully compiled once their sibling packages exist, so their first real build is during execution. Only Tasks 10-11 (lint, demo) still specify interfaces + tests + the non-obvious mechanics in prose where the code is long; the implementer writes those mechanical bodies against the given tests, and the subagent review loop covers the fill-in.
 - **Type consistency:** `manifest.Task`/`Manifest`, `config.EngineConfig` (Plan 1), `store.Attempt`/`InsertAttempt` (Plan 1), `state.RunState`/`TaskView`, `verify.Result`, `engine.BuildArgv` signature, and `runner.Options`/`RunResult` are consistent across the tasks that produce and consume them.
 - **Known risk flagged for execution:** Task 8's deterministic fail→retry test may need a minimal `mock-worker` grammar addition (a fail-once sentinel) — called out in the task so the implementer handles it deliberately rather than faking a retry.
