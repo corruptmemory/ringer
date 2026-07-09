@@ -1,5 +1,7 @@
 # Ringer Go Rewrite — Plan 2: The Verified Run Path
 
+> **STATUS: EXECUTED 2026-07-09** — all 13 tasks complete on branch `go-run-path` via subagent-driven development; final whole-branch review: ready to merge, 0 Critical. Milestone 1 proven live (`ringer demo`: pass + multi-file + fail→retry→pass, zero cost). CI green ubuntu+macos throughout. Where implementation deviated from this document's literal code, the review ledger (`.superpowers/sdd/progress.md`) and spec §9.4 record the adjudications — notably: active-runs.json keeps Python parity (5-field entries, prune-on-write); `runs/<id>.json` is Go-authoritative; `MOCK_FAIL_ONCE` added to the mock grammar (sanctioned by Task 9's note below); `RegisterActiveRun`/`newCollector`/`newActor` signatures grew during review fixes. The code on the branch is authoritative over the code blocks below.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make `ringer run <manifest>` execute a manifest of tasks in parallel against pluggable engines, verify each by executing its check, retry failures once, and log every attempt to the SQLite store — headless, no isolation yet. **Milestone 1** (Tasks 1–9): a runnable, watchable end-to-end demo against the zero-cost `mock` engine. **Milestone 2** (Tasks 10–13): the `lint`/`demo` subcommands and real-engine ergonomics.
