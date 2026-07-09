@@ -3,6 +3,8 @@ package runner
 import (
 	"io"
 	"sync"
+
+	"github.com/corruptmemory/ringer/internal/logging"
 )
 
 // collectorOp tags the closed set of commands the collector actor accepts.
@@ -30,12 +32,15 @@ type collectorCmd struct {
 // A single owner goroutine drains one buffered command channel carrying BOTH
 // append and tail commands — one FIFO channel (not two) so a tail always sees
 // every append that preceded it. Lifecycle mirrors the run's actor:
-// recover-guarded stop, WaitGroup wait, drain-then-exit.
+// recover-guarded stop (logging any recovered double-stop, never silent),
+// WaitGroup wait, drain-then-exit.
 type collector struct {
+	runID      string
 	capPerTask int
 	cmds       chan collectorCmd
 	quit       chan struct{}
 	wg         sync.WaitGroup
+	lg         logging.Logger
 	tails      map[string]*taskTail // owned solely by run()
 }
 
@@ -45,11 +50,13 @@ type taskTail struct {
 	bytes  int
 }
 
-func newCollector(capPerTask int) *collector {
+func newCollector(capPerTask int, runID string, lg logging.Logger) *collector {
 	return &collector{
+		runID:      runID,
 		capPerTask: capPerTask,
 		cmds:       make(chan collectorCmd, 256),
 		quit:       make(chan struct{}),
+		lg:         lg,
 		tails:      map[string]*taskTail{},
 	}
 }
@@ -131,7 +138,13 @@ func (s *collectorSink) Write(p []byte) (int, error) {
 }
 
 // tail returns up to limitBytes of the most recent output for key, in order.
+// limitBytes <= 0 means "no output": it returns "" immediately without
+// sending a command, so the owner goroutine (assembleTail) never has to
+// handle a non-positive limit — a negative bound there would panic slicing.
 func (c *collector) tail(key string, limitBytes int) string {
+	if limitBytes <= 0 {
+		return ""
+	}
 	reply := make(chan string, 1)
 	select {
 	case c.cmds <- collectorCmd{op: opTail, key: key, limit: limitBytes, reply: reply}:
@@ -171,8 +184,16 @@ func (c *collector) assembleTail(key string, limitBytes int) string {
 	return string(b)
 }
 
+// stop is the shutdown trigger, mirroring actor.stop(): idempotent
+// recover-guarded close. A recovered double-stop is a correct no-op but also
+// evidence of a stray stop() caller, so it is logged (never swallowed),
+// keyed by runID — see actor.stop() for the full rationale.
 func (c *collector) stop() {
-	defer func() { _ = recover() }() // idempotent double-stop, see actor-pattern lifecycle
+	defer func() {
+		if r := recover(); r != nil {
+			c.lg.Warnf("output collector %s: recovered panic in stop (double-stop?): %v", c.runID, r)
+		}
+	}()
 	close(c.quit)
 }
 func (c *collector) wait()        { c.wg.Wait() }
