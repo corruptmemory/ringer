@@ -76,3 +76,20 @@ func TestStatusAndFinalGoldens(t *testing.T) {
 		t.Error("final report work section must be primary")
 	}
 }
+
+func TestIndexPageGolden(t *testing.T) {
+	runs := []state.RunState{
+		{RunID: "run-123", RunName: "demo", Identity: "id", Done: true, StartedAt: "2026-07-10T10:00:00Z", UpdatedAt: "2026-07-10T10:01:04Z",
+			Tasks: []state.TaskView{{Status: "passed"}, {Status: "passed"}}},
+		{RunID: "run-124", RunName: "live-run", Identity: "id", Done: false, StartedAt: "2026-07-10T10:02:00Z", UpdatedAt: "2026-07-10T10:02:20Z",
+			Tasks: []state.TaskView{{Status: "running"}}},
+	}
+	rows := BuildIndexRows(runs, "/s")
+	page := renderComponentString(t, IndexPage(rows))
+	assertGolden(t, "index_page.golden.html", page)
+	for _, must := range []string{"refresh", "demo", "live-run", "file://", "<table"} {
+		if !strings.Contains(page, must) {
+			t.Errorf("index page missing %q", must)
+		}
+	}
+}

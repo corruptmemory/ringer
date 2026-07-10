@@ -1,6 +1,10 @@
 package views
 
-import "github.com/corruptmemory/ringer/internal/state"
+import (
+	"fmt"
+
+	"github.com/corruptmemory/ringer/internal/state"
+)
 
 // pageHead is the shared <head> for both artifact pages: charset, the CSP
 // meta (Task 6), an optional self-refresh meta the status page uses and the
@@ -53,6 +57,46 @@ templ FinalReportPage(rs state.RunState, stateDir string) {
 				@progressBar(rs)
 				@workSection(rs, stateDir, true)
 				<footer>Finished by ringer.</footer>
+			</div>
+		</body>
+	</html>
+}
+
+// IndexPage is the self-refreshing (5s) all-runs index: one pane of glass
+// across every run-state file under a state_dir (port of
+// render_artifact_index_html, ringer.py:3592-3660). Unlike StatusPage/
+// FinalReportPage it wraps in `.wrap`, not `.page` — parity with Python,
+// which only styles `.page`, leaving this page's wrapper intentionally
+// unstyled by artifact.css.
+templ IndexPage(rows []IndexRow) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer · all runs", 5)
+		<body>
+			<div class="wrap">
+				<h1>ringer — all runs</h1>
+				<p class="meta">{ fmt.Sprintf("%d runs", len(rows)) }</p>
+				<table>
+					<thead><tr><th>State</th><th>Run</th><th>Identity</th><th>Result</th><th>Elapsed</th><th>Artifacts</th></tr></thead>
+					<tbody>
+						for _, r := range rows {
+							<tr>
+								<td><span class="chip" style={ "background:" + StatusColor(r.State) }>{ r.State }</span></td>
+								<td>{ r.RunName }</td>
+								<td>{ r.Identity }</td>
+								<td>{ fmt.Sprintf("%d pass / %d fail", r.Pass, r.Fail) }</td>
+								<td class="mono">{ r.Elapsed }</td>
+								<td class="run-links">
+									<a href={ templ.SafeURL(r.LiveHref) }>live</a>
+									if r.ReportHref != "" {
+										{ " · " }
+										<a href={ templ.SafeURL(r.ReportHref) }>report</a>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
 			</div>
 		</body>
 	</html>

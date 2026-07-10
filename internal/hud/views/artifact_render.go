@@ -419,3 +419,67 @@ func findReportDeliverable(ds []state.Deliverable) (state.Deliverable, bool) {
 	}
 	return state.Deliverable{}, false
 }
+
+// --- All-runs artifact index (Task 10) ---
+//
+// Ports render_artifact_index_html (ringer.py:3592-3660) and status_color
+// (ringer.py:2131-2132).
+
+// IndexRow is one row of the all-runs index page: a run's status chip
+// state, name, identity, pass/fail tally, elapsed time, and links to its
+// live page and (once the run is done) its final report.
+type IndexRow struct {
+	RunName, Identity, State, Elapsed, LiveHref, ReportHref string
+	Pass, Fail                                              int
+}
+
+// BuildIndexRows maps run states into index rows, one per run, in the order
+// given (the caller owns newest-first ordering — the pattern
+// render_artifact_index_html itself follows, taking an already-sorted
+// entries list rather than sorting internally). LiveHref/ReportHref are
+// file:// URIs into the run's artifacts directory; ReportHref is left empty
+// until the run is done, mirroring Python's report_ready gate.
+func BuildIndexRows(runs []state.RunState, stateDir string) []IndexRow {
+	rows := make([]IndexRow, 0, len(runs))
+	for _, rs := range runs {
+		row := IndexRow{
+			RunName:  rs.RunName,
+			Identity: rs.Identity,
+			State:    RunState(rs),
+			Elapsed:  FormatDuration(RunElapsed(rs)),
+			Pass:     PassCount(rs),
+			Fail:     FailCount(rs),
+			LiveHref: "file://" + filepath.Join(artifact.ArtifactsDir(stateDir), rs.RunID+".html"),
+		}
+		if rs.Done {
+			row.ReportHref = "file://" + filepath.Join(artifact.ArtifactsDir(stateDir), rs.RunID+"-report.html")
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+// statusColors is the port of STATUS_COLORS (ringer.py:2116-2129), trimmed
+// to the state-bucket vocabulary RunState (render.go) actually emits. Go's
+// run bucket is "live"/"pass"/"fail" (there's no separate "running"/
+// "retrying"/"verifying"/"queued"/"died"/"finished" — those are Python-side
+// distinctions from a richer status string), and ArtifactCSS defines no
+// --running custom property, so "live"/"running" both map to --accent here
+// rather than Python's var(--running).
+var statusColors = map[string]string{
+	"pass":    "var(--pass)",
+	"fail":    "var(--fail)",
+	"live":    "var(--accent)",
+	"running": "var(--accent)",
+	"waiting": "var(--waiting)",
+}
+
+// StatusColor is a status chip's background color (port of status_color,
+// ringer.py:2131-2132), defaulting to --waiting for any state outside
+// statusColors.
+func StatusColor(state string) string {
+	if c, ok := statusColors[strings.ToLower(state)]; ok {
+		return c
+	}
+	return "var(--waiting)"
+}
