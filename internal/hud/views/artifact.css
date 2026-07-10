@@ -55,6 +55,21 @@ body {
   max-width: 860px;
   margin: 0 auto;
 }
+.crumbs {
+  max-width: 860px;
+  margin: 0 auto 18px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.crumbs a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.crumbs a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
 .corner {
   display: flex;
   align-items: baseline;

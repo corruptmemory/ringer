@@ -22,6 +22,22 @@ templ pageHead(title string, refreshSeconds int) {
 	</head>
 }
 
+// breadcrumb is the small "← dashboard · all runs" nav row at the top of every
+// served artifact page. The dashboard link is root-absolute ("/", the HUD
+// home) — correct when the page is served over HTTP by the HUD, a harmless
+// dead link when the page is opened straight from disk. The all-runs link
+// stays inside the artifacts tree (base + "index.html"), so it resolves under
+// both HTTP and file://. allRuns is false on the index page itself.
+templ breadcrumb(base string, allRuns bool) {
+	<nav class="crumbs">
+		<a href="/">← dashboard</a>
+		if allRuns {
+			{ " · " }
+			<a href={ templ.SafeURL(base + "index.html") }>all runs</a>
+		}
+	</nav>
+}
+
 // StatusPage is the self-refreshing (2s) live artifact page (port of
 // render_status_html, ringer.py:3451-3488): corner header, live briefing,
 // progress bar, work section, and a footer noting the page keeps updating
@@ -36,6 +52,7 @@ templ StatusPage(rs state.RunState, stateDir, base string) {
 	<html lang="en">
 		@pageHead("ringer · "+rs.RunName, 2)
 		<body>
+			@breadcrumb(base, true)
 			<div class="page">
 				@artifactCorner(rs, true)
 				@briefingHeading(rs, true)
@@ -56,6 +73,7 @@ templ FinalReportPage(rs state.RunState, stateDir, base string) {
 	<html lang="en">
 		@pageHead("ringer report · "+rs.RunName, 0)
 		<body>
+			@breadcrumb(base, true)
 			<div class="page">
 				@artifactCorner(rs, false)
 				@briefingHeading(rs, false)
@@ -82,6 +100,7 @@ templ FileWrapperPage(d WrapperData) {
 	<html lang="en">
 		@pageHead("ringer · "+d.RunName+" · "+d.TaskKey, 0)
 		<body>
+			@breadcrumb(d.Base, true)
 			<div class="page">
 				<header class="corner">
 					<span class="live-dot waiting" aria-hidden="true"></span>
@@ -109,6 +128,7 @@ templ IndexPage(rows []IndexRow) {
 	<html lang="en">
 		@pageHead("ringer · all runs", 5)
 		<body>
+			@breadcrumb("", false)
 			<div class="wrap">
 				<h1>ringer — all runs</h1>
 				<p class="meta">{ fmt.Sprintf("%d runs", len(rows)) }</p>

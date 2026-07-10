@@ -55,6 +55,21 @@ body {
   max-width: 860px;
   margin: 0 auto;
 }
+.crumbs {
+  max-width: 860px;
+  margin: 0 auto 18px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.crumbs a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.crumbs a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
 .corner {
   display: flex;
   align-items: baseline;
@@ -518,4 +533,4 @@ a:hover { text-decoration: underline; }
     gap: 6px 12px;
   }
 }
-</style></head><body><div class="page"><header class="corner"><span class="live-dot is-live" aria-hidden="true"></span> <span class="eyebrow">Ringer · <b>demo</b> · godlike-artix</span> <span class="clock mono">1m 04s elapsed</span></header><h1 id="right-now-heading" class="briefing">Ringer is working on 2 tasks — 1 finished and checked and 1 failed, started 1 minute 4 seconds ago.</h1><div class="rounds"><span class="pass"></span><span class="fail"></span></div><p class="legend">1 finished · 1 failed</p><section class="work" aria-labelledby="the-work-heading"><h2 id="the-work-heading">The work</h2><div class="work-list"><div class="work-group"><div class="worker"><span class="glyph pass" aria-hidden="true"></span> <span class="name" title="alpha">alpha</span> <span class="state pass">finished &amp; checked</span> <span class="time mono">5s</span></div><div class="work-group-body"><div class="work-list"><div class="work-item"><div class="work-main"><a class="work-link" href="view/run-123/alpha--alpha.txt.html">Alpha — document</a><div class="work-kind">document</div></div></div></div><span class="verified">How it was checked: alpha.txt exists</span> <details class="proof"><summary>See the proof</summary><pre>ok</pre></details> <span class="links"><span class="muted">—</span></span></div></div><div class="work-group"><div class="worker"><span class="glyph fail" aria-hidden="true"></span> <span class="name" title="bravo">bravo</span> <span class="state fail">failed</span> <span class="time mono">7s</span></div><div class="work-group-body"><p class="empty-note">Failed its check — nothing was delivered.</p><span class="links"><span class="muted">—</span></span></div></div></div></section><footer>Updated by ringer · this page refreshes while the work runs.</footer></div></body></html>
+</style></head><body><nav class="crumbs"><a href="/">← dashboard</a>  ·  <a href="index.html">all runs</a></nav><div class="page"><header class="corner"><span class="live-dot is-live" aria-hidden="true"></span> <span class="eyebrow">Ringer · <b>demo</b> · godlike-artix</span> <span class="clock mono">1m 04s elapsed</span></header><h1 id="right-now-heading" class="briefing">Ringer is working on 2 tasks — 1 finished and checked and 1 failed, started 1 minute 4 seconds ago.</h1><div class="rounds"><span class="pass"></span><span class="fail"></span></div><p class="legend">1 finished · 1 failed</p><section class="work" aria-labelledby="the-work-heading"><h2 id="the-work-heading">The work</h2><div class="work-list"><div class="work-group"><div class="worker"><span class="glyph pass" aria-hidden="true"></span> <span class="name" title="alpha">alpha</span> <span class="state pass">finished &amp; checked</span> <span class="time mono">5s</span></div><div class="work-group-body"><div class="work-list"><div class="work-item"><div class="work-main"><a class="work-link" href="view/run-123/alpha--alpha.txt.html">Alpha — document</a><div class="work-kind">document</div></div></div></div><span class="verified">How it was checked: alpha.txt exists</span> <details class="proof"><summary>See the proof</summary><pre>ok</pre></details> <span class="links"><span class="muted">—</span></span></div></div><div class="work-group"><div class="worker"><span class="glyph fail" aria-hidden="true"></span> <span class="name" title="bravo">bravo</span> <span class="state fail">failed</span> <span class="time mono">7s</span></div><div class="work-group-body"><p class="empty-note">Failed its check — nothing was delivered.</p><span class="links"><span class="muted">—</span></span></div></div></div></section><footer>Updated by ringer · this page refreshes while the work runs.</footer></div></body></html>

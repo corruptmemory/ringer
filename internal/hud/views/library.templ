@@ -18,16 +18,16 @@ templ LibraryPanel(lib artifact.Library) {
 		if len(lib.Artifacts) == 0 {
 			<div class="artifact-error">No artifacts yet.</div>
 		}
-		for name, entry := range lib.Artifacts {
-			<div class={ "artifact-row", entry.State }>
+		for _, le := range SortedLibraryEntries(lib) {
+			<div class={ "artifact-row", le.Entry.State }>
 				<span class="artifact-state-dot" aria-hidden="true"></span>
 				<div class="artifact-row-main">
-					<a href={ templ.SafeURL("/artifacts/live/" + url.PathEscape(name) + ".html") } class="artifact-name">{ name }</a>
-					<span class="mono artifact-age">{ entry.State }</span>
-					if entry.Identity != "" {
-						<span class="mono artifact-age">{ entry.Identity }</span>
+					<a href={ templ.SafeURL("/artifacts/live/" + url.PathEscape(artifact.SanitizeName(le.Name)) + ".html") } class="artifact-name">{ le.Name }</a>
+					<span class="mono artifact-age">{ le.Entry.State }</span>
+					if le.Entry.Identity != "" {
+						<span class="mono artifact-age">{ le.Entry.Identity }</span>
 					}
-					<span class="mono artifact-age">{ fmt.Sprintf("%d versions", len(entry.Versions)) }</span>
+					<span class="mono artifact-age">{ fmt.Sprintf("%d versions", len(le.Entry.Versions)) }</span>
 				</div>
 			</div>
 		}

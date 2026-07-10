@@ -238,7 +238,7 @@ func (w *Writer) writeWrappers(rs state.RunState) {
 			}
 			wp := filepath.Join(art, views.WrapperRelPath(rs.RunID, t.Key, d.Name))
 			w.renderFile(wp, views.FileWrapperPage(views.WrapperData{
-				RunName: rs.RunName, TaskKey: t.Key, Title: views.DeliverableTitle(d.Name), MetaLine: meta, Content: content}))
+				RunName: rs.RunName, TaskKey: t.Key, Title: views.DeliverableTitle(d.Name), MetaLine: meta, Content: content, Base: w.baseFor(wp)}))
 		}
 		if t.LogPath != "" {
 			content, size, trunc := views.ReadTail(t.LogPath, views.ArtifactWrapperTailBytes)
@@ -248,7 +248,7 @@ func (w *Writer) writeWrappers(rs state.RunState) {
 			}
 			wp := filepath.Join(art, views.WrapperRelPath(rs.RunID, t.Key, "worker.log"))
 			w.renderFile(wp, views.FileWrapperPage(views.WrapperData{
-				RunName: rs.RunName, TaskKey: t.Key, Title: "Work log", MetaLine: meta, Content: content}))
+				RunName: rs.RunName, TaskKey: t.Key, Title: "Work log", MetaLine: meta, Content: content, Base: w.baseFor(wp)}))
 		}
 	}
 }

@@ -52,8 +52,8 @@ func LibraryPanel(lib artifact.Library) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		for name, entry := range lib.Artifacts {
-			var templ_7745c5c3_Var2 = []any{"artifact-row", entry.State}
+		for _, le := range SortedLibraryEntries(lib) {
+			var templ_7745c5c3_Var2 = []any{"artifact-row", le.Entry.State}
 			templ_7745c5c3_Err = templ.RenderCSSItems(ctx, templ_7745c5c3_Buffer, templ_7745c5c3_Var2...)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
@@ -76,9 +76,9 @@ func LibraryPanel(lib artifact.Library) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var4 templ.SafeURL
-			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/artifacts/live/" + url.PathEscape(name) + ".html"))
+			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL("/artifacts/live/" + url.PathEscape(artifact.SanitizeName(le.Name)) + ".html"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 25, Col: 81}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 25, Col: 107}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -89,9 +89,9 @@ func LibraryPanel(lib artifact.Library) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var5 string
-			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(name)
+			templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(le.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 25, Col: 112}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 25, Col: 141}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 			if templ_7745c5c3_Err != nil {
@@ -102,9 +102,9 @@ func LibraryPanel(lib artifact.Library) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var6 string
-			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(entry.State)
+			templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(le.Entry.State)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 26, Col: 50}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 26, Col: 53}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 			if templ_7745c5c3_Err != nil {
@@ -114,15 +114,15 @@ func LibraryPanel(lib artifact.Library) templ.Component {
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
-			if entry.Identity != "" {
+			if le.Entry.Identity != "" {
 				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 8, "<span class=\"mono artifact-age\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var7 string
-				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(entry.Identity)
+				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(le.Entry.Identity)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 28, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 28, Col: 57}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
@@ -138,9 +138,9 @@ func LibraryPanel(lib artifact.Library) templ.Component {
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var8 string
-			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d versions", len(entry.Versions)))
+			templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d versions", len(le.Entry.Versions)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 30, Col: 86}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/library.templ`, Line: 30, Col: 89}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 			if templ_7745c5c3_Err != nil {

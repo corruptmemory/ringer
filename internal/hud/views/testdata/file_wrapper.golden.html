@@ -55,6 +55,21 @@ body {
   max-width: 860px;
   margin: 0 auto;
 }
+.crumbs {
+  max-width: 860px;
+  margin: 0 auto 18px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.crumbs a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.crumbs a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
 .corner {
   display: flex;
   align-items: baseline;
@@ -518,7 +533,7 @@ a:hover { text-decoration: underline; }
     gap: 6px 12px;
   }
 }
-</style></head><body><div class="page"><header class="corner"><span class="live-dot waiting" aria-hidden="true"></span> <span class="eyebrow">Ringer · <b>demo</b> · alpha</span> <span class="clock mono">artifact</span></header><section class="timeline"><h1 class="briefing">Work log</h1><p class="meta">alpha produced this.</p><pre>line one
+</style></head><body><nav class="crumbs"><a href="/">← dashboard</a>  ·  <a href="index.html">all runs</a></nav><div class="page"><header class="corner"><span class="live-dot waiting" aria-hidden="true"></span> <span class="eyebrow">Ringer · <b>demo</b> · alpha</span> <span class="clock mono">artifact</span></header><section class="timeline"><h1 class="briefing">Work log</h1><p class="meta">alpha produced this.</p><pre>line one
 line two
 &lt;script&gt;alert(1)&lt;/script&gt;
 </pre></section></div></body></html>

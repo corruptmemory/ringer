@@ -512,6 +512,10 @@ func StatusColor(state string) string {
 // <b> tags work; Content goes through templ's normal auto-escaping.
 type WrapperData struct {
 	RunName, TaskKey, Title, MetaLine, Content string
+	// Base is the relative prefix from this wrapper page's on-disk location
+	// (view/<run_id>/…) back to the artifacts root, for the breadcrumb's
+	// all-runs link. Wrappers are two dirs deep, so this is "../../".
+	Base string
 }
 
 // ArtifactWrapperTailBytes caps how much of a text deliverable (or the

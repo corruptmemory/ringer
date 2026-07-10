@@ -55,6 +55,21 @@ body {
   max-width: 860px;
   margin: 0 auto;
 }
+.crumbs {
+  max-width: 860px;
+  margin: 0 auto 18px;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+}
+.crumbs a {
+  color: var(--muted);
+  text-decoration: none;
+}
+.crumbs a:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
 .corner {
   display: flex;
   align-items: baseline;
@@ -518,4 +533,4 @@ a:hover { text-decoration: underline; }
     gap: 6px 12px;
   }
 }
-</style></head><body><div class="wrap"><h1>ringer — all runs</h1><p class="meta">2 runs</p><table><thead><tr><th>State</th><th>Run</th><th>Identity</th><th>Result</th><th>Elapsed</th><th>Artifacts</th></tr></thead> <tbody><tr><td><span class="chip" style="background:var(--pass);">pass</span></td><td>demo</td><td>id</td><td>2 pass / 0 fail</td><td class="mono">1m 04s</td><td class="run-links"><a href="file:///s/artifacts/run-123.html">live</a>  ·  <a href="file:///s/artifacts/run-123-report.html">report</a></td></tr><tr><td><span class="chip" style="background:var(--accent);">live</span></td><td>live-run</td><td>id</td><td>0 pass / 0 fail</td><td class="mono">20s</td><td class="run-links"><a href="file:///s/artifacts/run-124.html">live</a> </td></tr></tbody></table></div></body></html>
+</style></head><body><nav class="crumbs"><a href="/">← dashboard</a> </nav><div class="wrap"><h1>ringer — all runs</h1><p class="meta">2 runs</p><table><thead><tr><th>State</th><th>Run</th><th>Identity</th><th>Result</th><th>Elapsed</th><th>Artifacts</th></tr></thead> <tbody><tr><td><span class="chip" style="background:var(--pass);">pass</span></td><td>demo</td><td>id</td><td>2 pass / 0 fail</td><td class="mono">1m 04s</td><td class="run-links"><a href="file:///s/artifacts/run-123.html">live</a>  ·  <a href="file:///s/artifacts/run-123-report.html">report</a></td></tr><tr><td><span class="chip" style="background:var(--accent);">live</span></td><td>live-run</td><td>id</td><td>0 pass / 0 fail</td><td class="mono">20s</td><td class="run-links"><a href="file:///s/artifacts/run-124.html">live</a> </td></tr></tbody></table></div></body></html>

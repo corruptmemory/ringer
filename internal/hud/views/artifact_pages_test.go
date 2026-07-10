@@ -98,6 +98,32 @@ func TestPageBasePrefixesRelativeHrefs(t *testing.T) {
 	}
 }
 
+// TestBreadcrumbLinks locks the "← dashboard · all runs" nav: dashboard is the
+// root-absolute HUD home ("/"); all-runs is the base-relative index (so it
+// resolves under both HTTP and file://); the index page links only dashboard
+// (it is the all-runs page).
+func TestBreadcrumbLinks(t *testing.T) {
+	rs := fixedRun()
+	root := renderComponentString(t, StatusPage(rs, "/s", ""))
+	if !strings.Contains(root, `<a href="/">← dashboard</a>`) {
+		t.Errorf("status page missing dashboard breadcrumb link")
+	}
+	if !strings.Contains(root, `<a href="index.html">all runs</a>`) {
+		t.Errorf("root page all-runs link should be index.html, got:\n%s", root)
+	}
+	deep := renderComponentString(t, StatusPage(rs, "/s", "../"))
+	if !strings.Contains(deep, `<a href="../index.html">all runs</a>`) {
+		t.Errorf("deep page all-runs link should be ../index.html")
+	}
+	idx := renderComponentString(t, IndexPage(nil))
+	if !strings.Contains(idx, `<a href="/">← dashboard</a>`) {
+		t.Errorf("index page missing dashboard breadcrumb link")
+	}
+	if strings.Contains(idx, "all runs</a>") {
+		t.Errorf("index page must not link to itself as all-runs")
+	}
+}
+
 func TestReadTailTruncates(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "big.log")
