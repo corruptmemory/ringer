@@ -1,0 +1,35 @@
+package views
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/corruptmemory/ringer/internal/artifact"
+)
+
+// LibraryPanel renders the artifact library list. Reused row classes mirror
+// dashboard/ringside.html's artifact-row taxonomy (lifted verbatim into
+// ringside.css): the outer artifact-row is a fixed 2-column grid (dot,
+// main), so everything past the state dot must live inside a single
+// artifact-row-main child to keep that grid intact. .agents supplies the
+// same centered-list spacing runs.templ already reuses for its row list.
+templ LibraryPanel(lib artifact.Library) {
+	<div id="library" class="agents">
+		if len(lib.Artifacts) == 0 {
+			<div class="artifact-error">No artifacts yet.</div>
+		}
+		for name, entry := range lib.Artifacts {
+			<div class={ "artifact-row", entry.State }>
+				<span class="artifact-state-dot" aria-hidden="true"></span>
+				<div class="artifact-row-main">
+					<a href={ templ.SafeURL("/artifacts/live/" + url.PathEscape(name) + ".html") } class="artifact-name">{ name }</a>
+					<span class="mono artifact-age">{ entry.State }</span>
+					if entry.Identity != "" {
+						<span class="mono artifact-age">{ entry.Identity }</span>
+					}
+					<span class="mono artifact-age">{ fmt.Sprintf("%d versions", len(entry.Versions)) }</span>
+				</div>
+			</div>
+		}
+	</div>
+}

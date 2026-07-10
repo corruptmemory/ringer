@@ -1,0 +1,67 @@
+package views
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/corruptmemory/ringer/internal/state"
+)
+
+// RunsPanel renders the live runs list (newest first). Reference
+// dashboard/ringside.html:851-963 for the exact class structure the lifted
+// CSS styles; the data derivations are the Task-5 helpers.
+templ RunsPanel(runs []state.RunState) {
+	<div id="runs" class="agents">
+		if len(runs) == 0 {
+			<div class="artifact-error">No runs yet.</div>
+		}
+		for _, rs := range runs {
+			@runCard(rs)
+		}
+	</div>
+}
+
+// runCard is shared with the Plan-4b artifact pages. Class structure mirrors
+// dashboard/ringside.html:860-891 (section.run > header.corner with
+// live-dot/eyebrow/identity/run-stats), lifted verbatim into ringside.css.
+templ runCard(rs state.RunState) {
+	<section class={ "run", RunState(rs) }>
+		<header class="corner">
+			<span class={ "live-dot", templ.KV("live", RunState(rs) == "live") } aria-hidden="true"></span>
+			<span class="eyebrow">{ rs.RunName }</span>
+			<span class="identity">{ rs.Identity }</span>
+			<span class="clock mono run-stats">{ OutcomeText(rs) } · { FormatDuration(RunElapsed(rs)) }</span>
+		</header>
+		<div class="workers">
+			for _, t := range rs.Tasks {
+				@taskRow(rs.RunID, t)
+			}
+		</div>
+	</section>
+}
+
+// taskRow is shared with the Plan-4b artifact pages. Class structure mirrors
+// dashboard/ringside.html:925-957 (.worker row with a .glyph.<kind> dot,
+// .name, .state.<kind> label, .time; engine/log-link ride the .activity
+// second line the CSS already reserves under the 4-column worker grid).
+templ taskRow(runID string, t state.TaskView) {
+	<div class="worker">
+		<span class={ "glyph", TaskKind(t) } aria-hidden="true"></span>
+		<span class="name">{ t.Key }</span>
+		<span class={ "state", TaskKind(t) }>{ TaskStateText(TaskKind(t)) }</span>
+		<span class="time mono">{ FormatDuration(TaskElapsed(t)) }</span>
+		if t.Engine != "" || t.LogPath != "" {
+			<span class="activity mono">
+				if t.Engine != "" {
+					{ t.Engine }
+				}
+				if t.Engine != "" && t.LogPath != "" {
+					{ " · " }
+				}
+				if t.LogPath != "" {
+					<a href={ templ.SafeURL(fmt.Sprintf("/logs/%s/%s", url.PathEscape(runID), url.PathEscape(t.Key))) }>view log</a>
+				}
+			</span>
+		}
+	</div>
+}

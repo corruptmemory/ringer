@@ -9,14 +9,16 @@ import (
 )
 
 type TaskView struct {
-	Key      string `json:"key"`
-	Engine   string `json:"engine"`
-	Model    string `json:"model"`
-	Status   string `json:"status"` // pending|running|passed|failed|timeout
-	Attempt  int    `json:"attempt"`
-	Tokens   int64  `json:"tokens"`
-	Verified string `json:"verified"`
-	LogPath  string `json:"log_path"`
+	Key       string `json:"key"`
+	Engine    string `json:"engine"`
+	Model     string `json:"model"`
+	Status    string `json:"status"` // pending|running|passed|failed|timeout
+	Attempt   int    `json:"attempt"`
+	Tokens    int64  `json:"tokens"`
+	Verified  string `json:"verified"`
+	LogPath   string `json:"log_path"`
+	StartedAt string `json:"started_at"` // RFC3339, first-attempt start ("" until running)
+	EndedAt   string `json:"ended_at"`   // RFC3339, final outcome time ("" until finished)
 }
 
 type RunState struct {

@@ -154,6 +154,24 @@ func readRawFile(t *testing.T, dir string) map[string]ActiveRun {
 	return raw
 }
 
+func TestTaskViewTimingRoundTrips(t *testing.T) {
+	dir := t.TempDir()
+	s := RunState{RunID: "r1", RunName: "r", StartedAt: "2026-07-09T00:00:00Z",
+		Tasks: []TaskView{{Key: "a", Status: "passed", StartedAt: "2026-07-09T00:00:01Z", EndedAt: "2026-07-09T00:00:04Z"}}}
+	if err := WriteRunState(dir, s); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "runs", "r1.json"))
+	var probe map[string]any
+	_ = json.Unmarshal(data, &probe)
+	task0 := probe["tasks"].([]any)[0].(map[string]any)
+	for _, k := range []string{"started_at", "ended_at"} {
+		if _, ok := task0[k]; !ok {
+			t.Fatalf("TaskView missing timing key %q: %v", k, task0)
+		}
+	}
+}
+
 func TestPruneDropsNonPositivePIDs(t *testing.T) {
 	stateDir := t.TempDir()
 	// Register a run, then corrupt its PID to 0 on disk — the shared file is

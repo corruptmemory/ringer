@@ -25,6 +25,7 @@ type actorCmd struct {
 	attempt           int
 	tokens            int64
 	verified, logPath string
+	ts                string              // RFC3339; opSetStatus/opSetResult only
 	reply             chan state.RunState // opSnapshot only
 }
 
@@ -71,6 +72,9 @@ func (a *actor) run() {
 			if tv := a.tasks[c.key]; tv != nil {
 				tv.Status = c.status
 				tv.Attempt = c.attempt
+				if tv.StartedAt == "" { // first transition to running only; a retry's 2nd setStatus must not overwrite it
+					tv.StartedAt = c.ts
+				}
 			}
 		case opSetResult:
 			if tv := a.tasks[c.key]; tv != nil {
@@ -78,6 +82,7 @@ func (a *actor) run() {
 				tv.Tokens = c.tokens
 				tv.Verified = c.verified
 				tv.LogPath = c.logPath
+				tv.EndedAt = c.ts
 			}
 		case opSnapshot:
 			out := state.RunState{RunID: a.runID, RunName: a.runName, Identity: a.identity}
@@ -118,12 +123,12 @@ func (a *actor) stopAndWait() { a.stop(); a.wait() }
 // setStatus and setResult are fire-and-forget: the send rendezvous with run()'s
 // receive (so ordering is preserved), but the caller does not block until the
 // mutation is applied — it has no need to.
-func (a *actor) setStatus(key, status string, attempt int) {
-	a.cmds <- actorCmd{op: opSetStatus, key: key, status: status, attempt: attempt}
+func (a *actor) setStatus(key, status string, attempt int, ts string) {
+	a.cmds <- actorCmd{op: opSetStatus, key: key, status: status, attempt: attempt, ts: ts}
 }
 
-func (a *actor) setResult(key, status string, tokens int64, verified, logPath string) {
-	a.cmds <- actorCmd{op: opSetResult, key: key, status: status, tokens: tokens, verified: verified, logPath: logPath}
+func (a *actor) setResult(key, status string, tokens int64, verified, logPath, ts string) {
+	a.cmds <- actorCmd{op: opSetResult, key: key, status: status, tokens: tokens, verified: verified, logPath: logPath, ts: ts}
 }
 
 // snapshot is request-reply: it sends its own reply channel and blocks for the

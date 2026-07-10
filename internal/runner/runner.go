@@ -236,7 +236,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	engineName, engConf, model, err := resolveTaskEngine(opts.Engines, task)
 	if err != nil {
 		lg.Errorf("task %s: %v", task.Key, err)
-		a.setResult(task.Key, "failed", -1, task.Verified, "")
+		a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339))
 		return
 	}
 	var iso isolate.Isolator
@@ -246,7 +246,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		iso = opts.Isolator
 		if iso == nil {
 			lg.Errorf("task %s: isolation=\"jail\" but no isolator was selected (CLI preflight bug)", task.Key)
-			a.setResult(task.Key, "failed", -1, task.Verified, "")
+			a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339))
 			return
 		}
 	}
@@ -254,7 +254,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	taskDir := filepath.Join(opts.Manifest.Workdir, task.Key)
 	if err := prepareTaskDir(opts.Manifest, taskDir); err != nil {
 		lg.Errorf("task %s: prepare taskdir: %v", task.Key, err)
-		a.setResult(task.Key, "failed", -1, task.Verified, "")
+		a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339))
 		return
 	}
 	logsDir := filepath.Join(opts.Manifest.Workdir, "logs")
@@ -300,7 +300,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		attempts = attempt
-		a.setStatus(task.Key, "running", attempt)
+		a.setStatus(task.Key, "running", attempt, time.Now().UTC().Format(time.RFC3339))
 
 		// Timed from worker spawn through verify completion (Python parity:
 		// per-attempt wall time), so duration_s is populated for every row
@@ -380,7 +380,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		cleanupWorktreeOnPass(opts.Manifest, lg, task.Key, taskDir, logsDir)
 	}
 
-	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath)
+	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath, time.Now().UTC().Format(time.RFC3339))
 	lg.Infof("task %s: %s (%d attempt(s), tokens=%d)", task.Key, verdict, attempts, tokens)
 }
 

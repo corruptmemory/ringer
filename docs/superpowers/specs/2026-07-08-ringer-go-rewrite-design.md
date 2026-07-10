@@ -23,7 +23,7 @@ Ringer today is a single 8300-line Python 3.11+ file (`ringer.py`, stdlib-only, 
 | Driver: `modernc.org/sqlite` (pure Go) | Multi-source research 2026-07-08 (Perplexity deep research, Codex web research, direct reads of cznic tracker): multi-process support is a stated changelog feature (v1.1.0-alpha.2, 2019); zero corruption reports; flagship issue #232 is single-process pool contention, maintainer deems BUSY legitimate. Verdict: safe-with-caveats; caveats are config-level (§7). Fallback documented: `ncruces/go-sqlite3` (mptest-validated) behind the store seam |
 | Linux worker sandbox: vendor flywheel's `jail` package, native engine integration | Rootless userns+mount-ns+chroot; `jail.Command()` returns `*exec.Cmd` (fits spawn path unchanged); default-deny reads is a security upgrade over Seatbelt (credentials invisible to rented-compute workers); no bwrap dependency. flywheel's copy is strictly ahead of lightweight-containers' (TmpfsMount, SetDropUser, /dev/pts) |
 | Keep `engines/opencode-sandboxed.sh` | macOS Seatbelt lane, referenced by config path only; not Python/Rust |
-| Stack | chi, BurntSushi/toml, go-flags, templ (artifact pages), `go:embed` (ringside.html), build.sh as sole entry point, table-driven tests |
+| Stack | chi, BurntSushi/toml, go-flags, templ (HUD dashboard + artifact pages), htmx + idiomorph (vendored, poll+morph), `go:embed` (vendored static assets + templ-compiled views), build.sh as sole entry point, table-driven tests |
 
 ## 3. CLI surface
 
@@ -115,10 +115,15 @@ jail_ro_binds = ["~/.opencode"]   # ro binds — engine installs living outside 
 
 ## 8. HUD and artifacts
 
-- `ringer hud`: chi on 127.0.0.1:8700. Frozen endpoints: `/` (ringside), `/api/runs`, `/api/models`, `/api/library`, `/api/open-folder` (fix: `xdg-open` on Linux, `open` on macOS), `/artifacts/<path>`, `/logs/<run_id>/<task_key>` (64KB tail). Single fixed port; fail if taken (as upstream).
-- `ringside.html`: models tab **baked into the committed asset** (upstream injected at serve time for Tauri-sharing reasons that no longer exist); embedded `go:embed`. `dashboard.html` + `hud/` tree deleted.
-- `run` keeps ensure-HUD-running: probe :8700 → spawn detached `ringer hud` → open browser once per session.
-- Artifacts: templ components render the zero-LLM pages byte-equivalent-in-contract (paths `~/.ringer/artifacts/live/<run_name>.html`, versioned `<run_id>.html`, `<run_id>-report.html`, `index.html`, `library.json` schema frozen — Ringside consumes these). Dead-run reconciliation + deliverables copy ported.
+> **Amended 2026-07-09 (Plan 4 design re-decision):** the HUD is a **templ + htmx server-rendered dashboard**, not an embedded `ringside.html` SPA. Rationale: the artifact pages (below) are already templ; keeping the dashboard as a Python-era inline-JS SPA fed by a Go→Python JSON *schema adapter* meant two rendering stacks plus a Frankenstack build step (run the old Python injector to splice the models tab into the committed asset). Unifying on templ+htmx deletes the adapter, the embedded blob, and the bake, and lets the dashboard share components with the artifact renderer (Plan 4b). Live-update mechanism: **htmx polling + Idiomorph** (poll now, SSE a possible later upgrade); morph preserves scroll/focus/expanded state, which the upstream SPA already did by hand.
+
+- `ringer hud`: chi on 127.0.0.1:8700. Single fixed port; fail if taken (as upstream).
+- **Server-rendered dashboard (templ):** `GET /` returns the full page (layout: vendored htmx + idiomorph, tab nav, three panels). The live panels poll HTML **fragment** routes and morph the result in — `GET /hud/runs`, `GET /hud/library`, `GET /hud/models` carry `hx-trigger="every 2s" hx-swap="morph"`. Fragments render **straight from the Go run-state** (`state.RunState`) and `artifact.Library` — no JSON, no schema adapter. The former `normalizeRuns` client derivations (live/pass/fail/elapsed) become pure Go helper funcs.
+- **File-serving routes, unchanged:** `GET /artifacts/<path>`, `GET /logs/<run_id>/<task_key>` (64KB tail), `GET /api/open-folder` (fix: `xdg-open` on Linux, `open` on macOS). `GET /healthz` is the cheap ensure-running probe.
+- **Assets:** vendored `htmx` + `idiomorph` under `static/vendor/` (`go:embed`, `build.sh --refresh-*`); the salvaged Ringside CSS lifted into a committed `ringside.css` (embedded, linked) — the look is preserved, the inline JS is not. New Go dep `github.com/a-h/templ`.
+- `run`/`demo` keep ensure-HUD-running: probe `:8700/healthz` → spawn detached `ringer hud` → open browser once per session.
+- **Artifacts (Plan 4b):** templ components render the zero-LLM pages byte-equivalent-in-contract (paths `~/.ringer/artifacts/live/<run_name>.html`, versioned `<run_id>.html`, `<run_id>-report.html`, `index.html`, `library.json` schema frozen). The run-card/task-row templ components are **shared with the dashboard**. Dead-run reconciliation + deliverables copy ported.
+- **Deletions deferred to the Plan-5 cutover (§11):** `dashboard.html`, `dashboard/ringside.html`, and the Rust `hud/` tree are removed at cutover — not before, because `ringer.py` still reads `ringside.html` until Python is deleted. Plan 4 lifts its CSS/markup into templ; the Go binary never embeds it.
 
 ## 9. Frozen contracts (conformance checklist)
 
@@ -126,7 +131,7 @@ jail_ro_binds = ["~/.opencode"]   # ro binds — engine installs living outside 
 2. Config TOML schema minus removed keys, plus `isolation`/`jail_state_dirs`.
 3. Engine spawn contract: args_template DSL, cwd, stdin closed, merged raw output, token_regex, full-access gating. `engines/opencode-sandboxed.sh` keeps working unchanged (macOS).
 4. On-disk: `~/.ringer/runs/<id>.json` schema, `active-runs.json`, artifacts tree + `library.json`, `nudge-state/`, worker log locations (taskdir or `workdir/logs/` in worktrees mode). **Adjudicated 2026-07-09 (Plan 2 final review):** `active-runs.json` keeps Python parity (5-field entries incl. `workdir`; prune-on-write) because both eras write the shared file. `runs/<id>.json` is **Go-authoritative** (the Task 5 Go schema, `done:bool` etc.) — it is written only by Go runs; the Python HUD is out-of-scope for Go-written state dirs, and Plan 4's Go HUD reads the Go schema.
-5. HTTP API consumed by `ringside.html` (§8 list).
+5. **Amended 2026-07-09:** the dashboard is server-rendered templ+htmx (§8), so there is **no external JSON API contract** to freeze. The frozen HUD surface is now the on-disk §9.4 schemas the templ reads directly, plus the file-serving routes (`/artifacts/<path>`, `/logs/<run_id>/<task_key>`, `/api/open-folder`). The `/hud/*` fragment routes are internal (server renders both the page and its fragments).
 6. CLI surface per SKILL.md: `lint` before `run`, `demo`, `--dry-run`, `--identity`, `models [--task-type|--explore|--open]`, `catalog --changes`, `hud`, `install-agent`.
 7. `registry/model-identity.toml` format.
 8. The four hard-won invariants, verbatim: stdin closed; sandbox mode explicit; verification executes the artifact; logs carry raw worker output only.
@@ -135,20 +140,20 @@ jail_ro_binds = ["~/.opencode"]   # ro binds — engine installs living outside 
 ## 10. Testing
 
 - **Unit (table-driven):** lint heuristics (seeded from upstream's cases), manifest parsing, args_template expansion, mock grammar, identity resolution, catalog diffing, scoreboard tiers, artifact goldens.
-- **E2E (black-box):** `ringer run` with mock engine — pass task + fail-then-retry task (locks the whole loop; mirrors upstream's only black-box test); `httptest` over the HUD API; jail integration test (auto-skip without userns); multi-process store smoke.
+- **E2E (black-box):** `ringer run` with mock engine — pass task + fail-then-retry task (locks the whole loop; mirrors upstream's only black-box test); `httptest` over the HUD's `/hud/*` fragment routes (asserting the rendered templ HTML carries the right run/task data) + the file-serving routes; jail integration test (auto-skip without userns); multi-process store smoke.
 - **CI:** one GitHub Actions workflow: `./build.sh --test` on Linux + macOS. Tauri `release.yml` deleted.
 - Error-logging discipline: errors route through the logger; tests install a recording logger — positive tests assert zero `.ERROR`s suite-wide.
 
 ## 11. Cutover (one branch, one PR)
 
-Delete: `ringer.py`, `hud/`, `tests/*.py`, `hooks/`, `scripts/`, `engines/mock_worker.py`, `dashboard/dashboard.html`, `.github/workflows/release.yml`.
-Keep: `engines/opencode-sandboxed.sh`, `templates/`, `registry/`, `docs/`, `dashboard/ringside.html` (moves into `internal/hud/` for embedding).
+Delete: `ringer.py`, `hud/`, `tests/*.py`, `hooks/`, `scripts/`, `engines/mock_worker.py`, `dashboard/dashboard.html`, `dashboard/ringside.html`, `.github/workflows/release.yml`. (**Amended 2026-07-09:** `dashboard/ringside.html` is deleted here, not embedded — Plan 4 lifts its CSS/markup into templ; it survives to cutover only because `ringer.py` still reads it.)
+Keep: `engines/opencode-sandboxed.sh`, `templates/`, `registry/`, `docs/`.
 Update: README (requirements: drop Python; `./ringer.py …` → `ringer …` everywhere), SKILL.md (same sweep), `config.sample.toml` (isolation keys; `[eval]` simplified), `.claude/skills/ringer` symlink target unchanged.
 Migrate: one-time `ringer db import --jsonl ~/.ringer/runs.jsonl` seeds eval history. Run-state files and artifacts remain readable as-is.
 
 ## 12. Removed (deliberate cuts)
 
-Postgres/Supabase eval backend; JSONL as source of truth; derived-read-model machinery (`db rebuild/sync`); per-run dashboard server + `dashboard.html` + `--browser`; Tauri desktop app; standalone backfill script (absorbed by `db import`); serve-time models-tab injection (baked in); macOS-only `open-folder` behavior (now per-OS).
+Postgres/Supabase eval backend; JSONL as source of truth; derived-read-model machinery (`db rebuild/sync`); per-run dashboard server + `dashboard.html` + `--browser`; Tauri desktop app; standalone backfill script (absorbed by `db import`); the embedded inline-JS `ringside.html` SPA + its JSON API + serve-time models-tab injection (**amended 2026-07-09:** replaced by a templ+htmx server-rendered dashboard, §8 — the models tab is a templ panel now); macOS-only `open-folder` behavior (now per-OS).
 
 ## 13. Spikes and risks (front of the implementation plan)
 
