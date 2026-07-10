@@ -109,6 +109,30 @@ func (s *Store) CatalogEvents(limit int) ([]catalog.Event, error) {
 	return out, err
 }
 
+// AllAttempts returns every row in `attempts`, oldest-first (insertion
+// order via the autoincrement id), for `ringer db export`.
+func (s *Store) AllAttempts() ([]Attempt, error) {
+	var out []Attempt
+	err := withBusyRetry(func() error {
+		out = out[:0]
+		rows, err := s.db.Query(`SELECT run_id,run_name,task_key,engine,model,task_type,verdict,retry,duration_s,tokens,check_output,identity,created_at FROM attempts ORDER BY id`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var a Attempt
+			if err := rows.Scan(&a.RunID, &a.RunName, &a.TaskKey, &a.Engine, &a.Model, &a.TaskType,
+				&a.Verdict, &a.Retry, &a.DurationS, &a.Tokens, &a.CheckOutput, &a.Identity, &a.CreatedAt); err != nil {
+				return err
+			}
+			out = append(out, a)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 func b2i(b bool) int {
 	if b {
 		return 1
