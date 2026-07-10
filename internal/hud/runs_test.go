@@ -1,10 +1,14 @@
 package hud
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/corruptmemory/ringer/internal/state"
 )
@@ -41,6 +45,40 @@ func TestHudRunsRendersFromGoState(t *testing.T) {
 			t.Fatalf("runs fragment missing %q\n---\n%s", want, body)
 		}
 	}
+}
+
+func TestScanRunStatesSortCapSkip(t *testing.T) {
+	dir := t.TempDir()
+	// 14 valid runs with increasing mtimes + 1 garbage file.
+	base := time.Date(2026, 7, 9, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 14; i++ {
+		id := fmt.Sprintf("run-%02d", i)
+		if err := state.WriteRunState(dir, state.RunState{RunID: id, RunName: id}); err != nil {
+			t.Fatal(err)
+		}
+		mt := base.Add(time.Duration(i) * time.Minute)
+		if err := os.Chtimes(filepath.Join(dir, "runs", id+".json"), mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "runs", "garbage.json"), []byte("{ not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := New(dir, nil).scanRunStates()
+	if len(got) != 12 {
+		t.Fatalf("cap: got %d runs, want 12", len(got))
+	}
+	// Newest-first: run-13 (latest mtime) must be first, and the oldest two
+	// (run-00, run-01) must have been dropped by the cap.
+	if got[0].RunID != "run-13" {
+		t.Fatalf("newest-first: got[0] = %q, want run-13", got[0].RunID)
+	}
+	for _, r := range got {
+		if r.RunID == "run-00" || r.RunID == "run-01" {
+			t.Fatalf("cap should have dropped the two oldest, found %q", r.RunID)
+		}
+	}
+	// garbage.json skipped, not counted or panicking.
 }
 
 func TestHudRunsEmpty(t *testing.T) {
