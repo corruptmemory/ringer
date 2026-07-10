@@ -4,7 +4,9 @@ package scoreboard
 import (
 	"math"
 	"sort"
+	"strings"
 
+	"github.com/corruptmemory/ringer/internal/catalog"
 	"github.com/corruptmemory/ringer/internal/store"
 )
 
@@ -93,4 +95,21 @@ func Scoreboard(s *store.Store, f Filter, reg Registry) ([]Row, error) {
 			MedianTokens: floorTokens(m.MedianTokensF), TaskTypes: nested[m.Model]})
 	}
 	return out, nil
+}
+
+// ExploreCandidates ports catalog_explore_candidates: untested, text->text,
+// context_length >= 32000, in SortModels order.
+func ExploreCandidates(models []catalog.Model, tested map[string]bool) []catalog.Model {
+	var out []catalog.Model
+	for _, m := range models {
+		if tested[m.ID] || m.ContextLength < 32000 {
+			continue
+		}
+		if !strings.Contains(m.Modality, "text->text") && m.Modality != "text" && m.Modality != "" {
+			continue
+		}
+		out = append(out, m)
+	}
+	catalog.SortModels(out)
+	return out
 }

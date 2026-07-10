@@ -4,6 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/corruptmemory/ringer/internal/catalog"
 	"github.com/corruptmemory/ringer/internal/store"
 )
 
@@ -38,5 +39,49 @@ func TestScoreboardResolvesIdentityAndNests(t *testing.T) {
 	}
 	if r.MedianTokens == nil || *r.MedianTokens != 100 {
 		t.Fatalf("median tokens wrong: %v", r.MedianTokens)
+	}
+}
+
+func TestExploreCandidates(t *testing.T) {
+	models := []catalog.Model{
+		{ID: "tested/model", ContextLength: 64000, Modality: "text->text"},             // filtered: already tested
+		{ID: "small/model", ContextLength: 8000, Modality: "text->text"},               // filtered: context too small
+		{ID: "vision/model", ContextLength: 128000, Modality: "text+image->text"},      // filtered: not text->text
+		{ID: "empty-modality/model", ContextLength: 32000, Modality: ""},               // kept: blank modality passes
+		{ID: "plain-text/model", ContextLength: 40000, Modality: "text"},               // kept: bare "text" passes
+		{ID: "cheap/model", ContextLength: 100000, Modality: "text->text", Free: true}, // kept
+		{ID: "at-threshold/model", ContextLength: 32000, Modality: "text->text"},       // kept: exactly 32000
+	}
+	tested := map[string]bool{"tested/model": true}
+
+	got := ExploreCandidates(models, tested)
+
+	wantIDs := map[string]bool{
+		"empty-modality/model": true,
+		"plain-text/model":     true,
+		"cheap/model":          true,
+		"at-threshold/model":   true,
+	}
+	if len(got) != len(wantIDs) {
+		t.Fatalf("ExploreCandidates: got %d candidates, want %d: %+v", len(got), len(wantIDs), got)
+	}
+	for _, m := range got {
+		if !wantIDs[m.ID] {
+			t.Errorf("ExploreCandidates: unexpected candidate %q", m.ID)
+		}
+	}
+
+	// SortModels order: non-variable-pricing first, then ascending price sum,
+	// then id — all these candidates have PromptPerM/CompletionPerM nil (sum
+	// 0), so the tiebreak is purely lexicographic by id.
+	var ids []string
+	for _, m := range got {
+		ids = append(ids, m.ID)
+	}
+	for i := 1; i < len(ids); i++ {
+		if ids[i-1] > ids[i] {
+			t.Errorf("ExploreCandidates: not in SortModels (id-ascending) order: %v", ids)
+			break
+		}
 	}
 }
