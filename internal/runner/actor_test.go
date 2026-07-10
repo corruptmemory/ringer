@@ -22,7 +22,7 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 		go func(k string) {
 			defer wg.Done()
 			a.setStatus(k, "running", 1, "2026-07-09T00:00:01Z")
-			a.setResult(k, "passed", 100, "did the thing", "/logs/"+k, "2026-07-09T00:00:04Z")
+			a.setResult(k, "passed", 100, "did the thing", "/logs/"+k, "2026-07-09T00:00:04Z", nil, "", nil)
 		}(k)
 	}
 	wg.Wait()

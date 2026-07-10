@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/corruptmemory/ringer/internal/artifact"
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
 	"github.com/corruptmemory/ringer/internal/isolate"
@@ -236,7 +237,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	engineName, engConf, model, err := resolveTaskEngine(opts.Engines, task)
 	if err != nil {
 		lg.Errorf("task %s: %v", task.Key, err)
-		a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339))
+		a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339), nil, "", nil)
 		return
 	}
 	var iso isolate.Isolator
@@ -246,7 +247,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		iso = opts.Isolator
 		if iso == nil {
 			lg.Errorf("task %s: isolation=\"jail\" but no isolator was selected (CLI preflight bug)", task.Key)
-			a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339))
+			a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339), nil, "", nil)
 			return
 		}
 	}
@@ -254,7 +255,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	taskDir := filepath.Join(opts.Manifest.Workdir, task.Key)
 	if err := prepareTaskDir(opts.Manifest, taskDir); err != nil {
 		lg.Errorf("task %s: prepare taskdir: %v", task.Key, err)
-		a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339))
+		a.setResult(task.Key, "failed", -1, task.Verified, "", time.Now().UTC().Format(time.RFC3339), nil, "", nil)
 		return
 	}
 	logsDir := filepath.Join(opts.Manifest.Workdir, "logs")
@@ -276,6 +277,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 	verdict := "ERROR"
 	var tokens int64 = -1
 	attempts := 0
+	var lastCheckOutput string
 
 	// Cleanups collect across every attempt and run once at task end, after
 	// runWorker has returned (the jailed process has fully exited) for the
@@ -342,6 +344,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		tokens = engine.ParseTokens(engConf.TokenRegex, col.tail(task.Key, 64<<10)) // scrape the post-exit tail
 
 		vres := verify.Verify(ctx, taskDir, task.Check, task.ExpectFiles, timeout)
+		lastCheckOutput = vres.Output
 		durationS := time.Since(attemptStart).Seconds()
 		switch {
 		case outcome.TimedOut:
@@ -376,11 +379,21 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 		}
 	}
 
+	var deliverables []state.Deliverable
+	var notes []string
 	if verdict == "PASS" {
+		var herr error
+		deliverables, notes, herr = artifact.HarvestOnPass(
+			opts.StateDir, runID, task.Key, taskDir, task.ExpectFiles, opts.Manifest.Worktrees)
+		if herr != nil {
+			lg.Warnf("task %s: harvest deliverables: %v", task.Key, herr)
+		}
 		cleanupWorktreeOnPass(opts.Manifest, lg, task.Key, taskDir, logsDir)
 	}
 
-	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath, time.Now().UTC().Format(time.RFC3339))
+	checkTail := capTail(lastCheckOutput, failureContextMax)
+	a.setResult(task.Key, verdictToStatus(verdict), tokens, task.Verified, logPath,
+		time.Now().UTC().Format(time.RFC3339), deliverables, checkTail, notes)
 	lg.Infof("task %s: %s (%d attempt(s), tokens=%d)", task.Key, verdict, attempts, tokens)
 }
 

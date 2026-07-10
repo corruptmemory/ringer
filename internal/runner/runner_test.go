@@ -138,12 +138,28 @@ func TestRunEndToEndMockEngine(t *testing.T) {
 		t.Errorf("active-runs.json still lists run %s after completion", res.RunID)
 	}
 
-	// Deliverables exist.
+	// Deliverables exist in the task's own workdir (pre-harvest location).
 	if _, err := os.Stat(filepath.Join(workdir, "pass", "out.txt")); err != nil {
 		t.Errorf("deliverable missing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(workdir, "retry", "r.txt")); err != nil {
 		t.Errorf("deliverable missing: %v", err)
+	}
+
+	// "pass" declared expect_files -> its deliverable is harvested (Task 3's
+	// artifact.HarvestOnPass, wired in by Task 5) and recorded onto the
+	// run-state snapshot's TaskView.
+	var passTV state.TaskView
+	for _, tv := range rs.Tasks {
+		if tv.Key == "pass" {
+			passTV = tv
+		}
+	}
+	if len(passTV.Deliverables) != 1 || passTV.Deliverables[0].Name != "out.txt" {
+		t.Fatalf("pass deliverable not harvested into state: %+v", passTV.Deliverables)
+	}
+	if _, err := os.Stat(passTV.Deliverables[0].Path); err != nil {
+		t.Errorf("harvested file missing on disk: %v", err)
 	}
 }
 

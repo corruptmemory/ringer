@@ -26,6 +26,9 @@ type actorCmd struct {
 	tokens            int64
 	verified, logPath string
 	ts                string              // RFC3339; opSetStatus/opSetResult only
+	deliverables      []state.Deliverable // opSetResult only
+	checkTail         string              // opSetResult only
+	notes             []string            // opSetResult only
 	reply             chan state.RunState // opSnapshot only
 }
 
@@ -83,6 +86,9 @@ func (a *actor) run() {
 				tv.Verified = c.verified
 				tv.LogPath = c.logPath
 				tv.EndedAt = c.ts
+				tv.Deliverables = c.deliverables
+				tv.CheckTail = c.checkTail
+				tv.DeliverableNotes = c.notes
 			}
 		case opSnapshot:
 			out := state.RunState{RunID: a.runID, RunName: a.runName, Identity: a.identity}
@@ -127,8 +133,8 @@ func (a *actor) setStatus(key, status string, attempt int, ts string) {
 	a.cmds <- actorCmd{op: opSetStatus, key: key, status: status, attempt: attempt, ts: ts}
 }
 
-func (a *actor) setResult(key, status string, tokens int64, verified, logPath, ts string) {
-	a.cmds <- actorCmd{op: opSetResult, key: key, status: status, tokens: tokens, verified: verified, logPath: logPath, ts: ts}
+func (a *actor) setResult(key, status string, tokens int64, verified, logPath, ts string, deliverables []state.Deliverable, checkTail string, notes []string) {
+	a.cmds <- actorCmd{op: opSetResult, key: key, status: status, tokens: tokens, verified: verified, logPath: logPath, ts: ts, deliverables: deliverables, checkTail: checkTail, notes: notes}
 }
 
 // snapshot is request-reply: it sends its own reply channel and blocks for the
