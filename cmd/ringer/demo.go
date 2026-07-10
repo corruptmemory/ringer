@@ -16,7 +16,7 @@ type demoCmd struct {
 	MaxParallel int    `long:"max-parallel" description:"override demo manifest max_parallel"`
 	Identity    string `long:"identity" description:"identity for eval rows (default: resolved from config/env/hostname)"`
 	DryRun      bool   `long:"dry-run" description:"print the plan and exit"`
-	NoDashboard bool   `long:"no-dashboard" description:"accepted; always headless in Plan 2 (no HUD yet)"`
+	NoDashboard bool   `long:"no-dashboard" description:"do not ensure the Ringside HUD is running / open a browser"`
 }
 
 func (c *demoCmd) Execute(args []string) error {
@@ -29,7 +29,7 @@ func (c *demoCmd) Execute(args []string) error {
 	// only in where the manifest came from, not in how it's run.
 	ctx, stop := signalContext()
 	defer stop()
-	return runManifestFile(ctx, manifestPath, c.MaxParallel, c.Identity, c.DryRun)
+	return runManifestFile(ctx, manifestPath, c.MaxParallel, c.Identity, c.DryRun, c.NoDashboard)
 }
 
 // buildDemoManifest returns the JSON bytes of a self-contained, 3-task mock

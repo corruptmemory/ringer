@@ -11,6 +11,7 @@ import (
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
+	"github.com/corruptmemory/ringer/internal/hud"
 	"github.com/corruptmemory/ringer/internal/isolate"
 	"github.com/corruptmemory/ringer/internal/lint"
 	"github.com/corruptmemory/ringer/internal/logging"
@@ -23,7 +24,7 @@ type runCmd struct {
 	MaxParallel int    `long:"max-parallel" description:"override manifest max_parallel"`
 	Identity    string `long:"identity" description:"identity for eval rows (default: resolved from config/env/hostname)"`
 	DryRun      bool   `long:"dry-run" description:"print the plan and exit"`
-	NoDashboard bool   `long:"no-dashboard" description:"accepted; always headless in Plan 2 (no HUD yet)"`
+	NoDashboard bool   `long:"no-dashboard" description:"do not ensure the Ringside HUD is running / open a browser"`
 	Args        struct {
 		Manifest string `positional-arg-name:"MANIFEST" description:"path to the manifest JSON"`
 	} `positional-args:"yes" required:"yes"`
@@ -32,7 +33,7 @@ type runCmd struct {
 func (c *runCmd) Execute(args []string) error {
 	ctx, stop := signalContext()
 	defer stop()
-	return runManifestFile(ctx, c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun)
+	return runManifestFile(ctx, c.Args.Manifest, c.MaxParallel, c.Identity, c.DryRun, c.NoDashboard)
 }
 
 // signalContext returns a context canceled by the first SIGINT/SIGTERM.
@@ -55,7 +56,7 @@ func signalContext() (context.Context, context.CancelFunc) {
 // `demo` reaches this exact function (not a reimplementation) by writing its
 // generated manifest to a temp path and calling this with that path — this
 // is the "same path run uses" the Task 11 brief calls for.
-func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverride int, identityFlag string, dryRun bool) error {
+func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverride int, identityFlag string, dryRun, noDashboard bool) error {
 	cfgPath := opts.Config
 	if cfgPath == "" {
 		cfgPath = config.DefaultPath()
@@ -73,6 +74,10 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 	lg, err := logging.New(logging.Config{Level: lvl, Format: cfg.Logging.Format})
 	if err != nil {
 		return err
+	}
+
+	if !dryRun && !noDashboard {
+		ensureHUDRunning(cfg.StateDirPath(), hud.DefaultPort, lg, true)
 	}
 
 	m, err := manifest.FromPath(manifestPath)
