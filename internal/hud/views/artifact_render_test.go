@@ -56,6 +56,24 @@ func TestDeliverableHrefTextWrapsImagesRaw(t *testing.T) {
 	}
 }
 
+// TestDeliverableHrefEncodesSpecialChars locks the raw-file branch's
+// percent-encoding: a deliverable basename carrying a "#"/"?"/space must not
+// leak through unencoded (the browser would otherwise mis-parse it as a URL
+// fragment/query), while a plain name is left byte-for-byte unchanged so
+// existing goldens (which only use plain names) are unaffected.
+func TestDeliverableHrefEncodesSpecialChars(t *testing.T) {
+	sd := "/x"
+	special := state.Deliverable{TaskKey: "t", Name: "chart#1.png", Path: "/x/artifacts/deliverables/r/t/chart#1.png"}
+	if h := DeliverableHref(special, "r", sd); h != "deliverables/r/t/chart%231.png" {
+		t.Errorf("special-char name should be percent-encoded, got %q", h)
+	}
+
+	plain := state.Deliverable{TaskKey: "t", Name: "notes.png", Path: "/x/artifacts/deliverables/r/t/notes.png"}
+	if h := DeliverableHref(plain, "r", sd); h != "deliverables/r/t/notes.png" {
+		t.Errorf("plain name should be unchanged, got %q", h)
+	}
+}
+
 func TestDeliverableTitle(t *testing.T) {
 	cases := map[string]string{
 		"worker.log":  "Work log",

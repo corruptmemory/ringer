@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -309,7 +310,21 @@ func DeliverableHref(d state.Deliverable, runID, stateDir string) string {
 	if err != nil {
 		return d.Path
 	}
-	return filepath.ToSlash(rel)
+	return encodePathSegments(filepath.ToSlash(rel))
+}
+
+// encodePathSegments percent-encodes each "/"-separated segment of a
+// slash-path independently, leaving the "/" separators themselves untouched
+// — the same url.PathEscape-per-segment pattern runs.templ/library.templ use
+// for their own href construction. This keeps a raw-file deliverable's href
+// well-formed when its basename carries a "#"/"?"/space that would otherwise
+// be mis-parsed by the browser as a URL fragment/query.
+func encodePathSegments(p string) string {
+	segments := strings.Split(p, "/")
+	for i, seg := range segments {
+		segments[i] = url.PathEscape(seg)
+	}
+	return strings.Join(segments, "/")
 }
 
 // ImageDataURI reads a deliverable image and returns a data: URI for inline
