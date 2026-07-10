@@ -39,6 +39,7 @@ var openPragmas = []string{
 }
 
 func Open(path string) (*Store, error) {
+	registerMedian()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
