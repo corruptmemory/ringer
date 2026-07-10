@@ -1,0 +1,53 @@
+package views
+
+// Layout is the Ringside page shell. The live panels poll their fragment
+// routes on load and every 2s, morphing the result in (idiomorph) so scroll
+// position and expanded tasks survive each refresh. The panels render empty
+// here; htmx fills them.
+templ Layout() {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>Ringside</title>
+			<link rel="stylesheet" href="/static/ringside.css"/>
+			<script src="/static/vendor/htmx.min.js"></script>
+			<script src="/static/vendor/idiomorph.min.js"></script>
+		</head>
+		<body hx-ext="morph">
+			<div class="page">
+				<header class="corner topbar">
+					<span id="top-dot" class="live-dot" aria-hidden="true"></span>
+					<div class="topbar-main">
+						<span class="eyebrow wordmark"><b>Ringside</b></span>
+					</div>
+					<time id="clock" class="clock mono"></time>
+				</header>
+				<main>
+					<section
+						id="runs-panel"
+						class="panel"
+						hx-get="/hud/runs"
+						hx-trigger="load, every 2s"
+						hx-swap="morph"
+					></section>
+					<section
+						id="library-panel"
+						class="panel"
+						hx-get="/hud/library"
+						hx-trigger="load, every 2s"
+						hx-swap="morph"
+					></section>
+					<section
+						id="models-panel"
+						class="panel"
+						hx-get="/hud/models"
+						hx-trigger="load"
+						hx-swap="morph"
+					></section>
+				</main>
+			</div>
+		</body>
+	</html>
+}
