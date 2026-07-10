@@ -6,7 +6,7 @@ import "github.com/corruptmemory/ringer/internal/state"
 // of render_work_section, ringer.py:3189-3221). primary switches on the
 // final-report styling (.work.is-primary) the self-refreshing status page
 // doesn't use.
-templ workSection(rs state.RunState, stateDir string, primary bool) {
+templ workSection(rs state.RunState, stateDir, base string, primary bool) {
 	<section class={ "work", templ.KV("is-primary", primary) } aria-labelledby="the-work-heading">
 		<h2 id="the-work-heading">The work</h2>
 		if len(rs.Tasks) == 0 {
@@ -14,7 +14,7 @@ templ workSection(rs state.RunState, stateDir string, primary bool) {
 		} else {
 			<div class="work-list">
 				for _, t := range rs.Tasks {
-					@workGroup(rs, t, stateDir)
+					@workGroup(rs, t, stateDir, base)
 				}
 			</div>
 		}
@@ -26,7 +26,7 @@ templ workSection(rs state.RunState, stateDir string, primary bool) {
 // render_work_group, ringer.py:3224-3309). This is where the artifact pages
 // diverge from the dashboard's plain taskRow (runs.templ) — each task gets
 // a .work-group-body underneath its worker row.
-templ workGroup(rs state.RunState, t state.TaskView, stateDir string) {
+templ workGroup(rs state.RunState, t state.TaskView, stateDir, base string) {
 	<div class="work-group">
 		<div class="worker">
 			<span class={ "glyph", TaskKind(t) } aria-hidden="true"></span>
@@ -40,7 +40,7 @@ templ workGroup(rs state.RunState, t state.TaskView, stateDir string) {
 			} else {
 				<div class="work-list">
 					for _, d := range t.Deliverables {
-						@workItem(rs.RunID, d, stateDir)
+						@workItem(rs.RunID, d, stateDir, base)
 					}
 				</div>
 			}
@@ -57,7 +57,7 @@ templ workGroup(rs state.RunState, t state.TaskView, stateDir string) {
 				</details>
 			}
 			<span class="links">
-				@taskLinks(rs.RunID, t, stateDir)
+				@taskLinks(rs.RunID, t, stateDir, base)
 			</span>
 		</div>
 	</div>
@@ -65,15 +65,15 @@ templ workGroup(rs state.RunState, t state.TaskView, stateDir string) {
 
 // workItem is one deliverable row: an optional inline image thumbnail plus
 // the link + kind label (port of render_work_item, ringer.py:3312-3346).
-templ workItem(runID string, d state.Deliverable, stateDir string) {
+templ workItem(runID string, d state.Deliverable, stateDir, base string) {
 	<div class="work-item">
 		if IsImageDeliverable(d.Name) && ImageDataURI(d.Path) != "" {
-			<a class="work-thumb-link" href={ templ.SafeURL(DeliverableHref(d, runID, stateDir)) }>
+			<a class="work-thumb-link" href={ templ.SafeURL(base + DeliverableHref(d, runID, stateDir)) }>
 				<img class="work-thumb" src={ templ.SafeURL(ImageDataURI(d.Path)) } alt={ d.Name }/>
 			</a>
 		}
 		<div class="work-main">
-			<a class="work-link" href={ templ.SafeURL(DeliverableHref(d, runID, stateDir)) }>{ deliverableLabel(d.Name) }</a>
+			<a class="work-link" href={ templ.SafeURL(base + DeliverableHref(d, runID, stateDir)) }>{ deliverableLabel(d.Name) }</a>
 			<div class="work-kind">{ DeliverableKind(d.Name) }</div>
 		</div>
 	</div>
@@ -82,7 +82,7 @@ templ workItem(runID string, d state.Deliverable, stateDir string) {
 // taskLinks is a task's "Read what it found" / "view the work log" link row
 // (port of render_task_links, ringer.py:3532-3591), joined with " · ", or a
 // muted em dash when the task has neither.
-templ taskLinks(runID string, t state.TaskView, stateDir string) {
+templ taskLinks(runID string, t state.TaskView, stateDir, base string) {
 	if len(taskLinkItems(runID, t, stateDir)) == 0 {
 		<span class="muted">—</span>
 	} else {
@@ -90,7 +90,7 @@ templ taskLinks(runID string, t state.TaskView, stateDir string) {
 			if i > 0 {
 				{ " · " }
 			}
-			<a href={ templ.SafeURL(l.href) }>{ l.text }</a>
+			<a href={ templ.SafeURL(base + l.href) }>{ l.text }</a>
 		}
 	}
 }

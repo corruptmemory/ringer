@@ -14,7 +14,7 @@ import "github.com/corruptmemory/ringer/internal/state"
 // of render_work_section, ringer.py:3189-3221). primary switches on the
 // final-report styling (.work.is-primary) the self-refreshing status page
 // doesn't use.
-func workSection(rs state.RunState, stateDir string, primary bool) templ.Component {
+func workSection(rs state.RunState, stateDir, base string, primary bool) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -68,7 +68,7 @@ func workSection(rs state.RunState, stateDir string, primary bool) templ.Compone
 				return templ_7745c5c3_Err
 			}
 			for _, t := range rs.Tasks {
-				templ_7745c5c3_Err = workGroup(rs, t, stateDir).Render(ctx, templ_7745c5c3_Buffer)
+				templ_7745c5c3_Err = workGroup(rs, t, stateDir, base).Render(ctx, templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -91,7 +91,7 @@ func workSection(rs state.RunState, stateDir string, primary bool) templ.Compone
 // render_work_group, ringer.py:3224-3309). This is where the artifact pages
 // diverge from the dashboard's plain taskRow (runs.templ) — each task gets
 // a .work-group-body underneath its worker row.
-func workGroup(rs state.RunState, t state.TaskView, stateDir string) templ.Component {
+func workGroup(rs state.RunState, t state.TaskView, stateDir, base string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -236,7 +236,7 @@ func workGroup(rs state.RunState, t state.TaskView, stateDir string) templ.Compo
 				return templ_7745c5c3_Err
 			}
 			for _, d := range t.Deliverables {
-				templ_7745c5c3_Err = workItem(rs.RunID, d, stateDir).Render(ctx, templ_7745c5c3_Buffer)
+				templ_7745c5c3_Err = workItem(rs.RunID, d, stateDir, base).Render(ctx, templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -320,7 +320,7 @@ func workGroup(rs state.RunState, t state.TaskView, stateDir string) templ.Compo
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
-		templ_7745c5c3_Err = taskLinks(rs.RunID, t, stateDir).Render(ctx, templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = taskLinks(rs.RunID, t, stateDir, base).Render(ctx, templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -334,7 +334,7 @@ func workGroup(rs state.RunState, t state.TaskView, stateDir string) templ.Compo
 
 // workItem is one deliverable row: an optional inline image thumbnail plus
 // the link + kind label (port of render_work_item, ringer.py:3312-3346).
-func workItem(runID string, d state.Deliverable, stateDir string) templ.Component {
+func workItem(runID string, d state.Deliverable, stateDir, base string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -365,9 +365,9 @@ func workItem(runID string, d state.Deliverable, stateDir string) templ.Componen
 				return templ_7745c5c3_Err
 			}
 			var templ_7745c5c3_Var19 templ.SafeURL
-			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(DeliverableHref(d, runID, stateDir)))
+			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(base + DeliverableHref(d, runID, stateDir)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 71, Col: 87}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 71, Col: 94}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 			if templ_7745c5c3_Err != nil {
@@ -409,9 +409,9 @@ func workItem(runID string, d state.Deliverable, stateDir string) templ.Componen
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var22 templ.SafeURL
-		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(DeliverableHref(d, runID, stateDir)))
+		templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(base + DeliverableHref(d, runID, stateDir)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 76, Col: 81}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 76, Col: 88}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 		if templ_7745c5c3_Err != nil {
@@ -424,7 +424,7 @@ func workItem(runID string, d state.Deliverable, stateDir string) templ.Componen
 		var templ_7745c5c3_Var23 string
 		templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(deliverableLabel(d.Name))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 76, Col: 110}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 76, Col: 117}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 		if templ_7745c5c3_Err != nil {
@@ -454,7 +454,7 @@ func workItem(runID string, d state.Deliverable, stateDir string) templ.Componen
 // taskLinks is a task's "Read what it found" / "view the work log" link row
 // (port of render_task_links, ringer.py:3532-3591), joined with " · ", or a
 // muted em dash when the task has neither.
-func taskLinks(runID string, t state.TaskView, stateDir string) templ.Component {
+func taskLinks(runID string, t state.TaskView, stateDir, base string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -498,9 +498,9 @@ func taskLinks(runID string, t state.TaskView, stateDir string) templ.Component 
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var27 templ.SafeURL
-				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(l.href))
+				templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(base + l.href))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 93, Col: 34}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 93, Col: 41}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 				if templ_7745c5c3_Err != nil {
@@ -513,7 +513,7 @@ func taskLinks(runID string, t state.TaskView, stateDir string) templ.Component 
 				var templ_7745c5c3_Var28 string
 				templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.JoinStringErrs(l.text)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 93, Col: 45}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/artifact_work.templ`, Line: 93, Col: 52}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var28))
 				if templ_7745c5c3_Err != nil {

@@ -59,7 +59,9 @@ func assertGolden(t *testing.T, name, got string) {
 
 func TestStatusAndFinalGoldens(t *testing.T) {
 	rs := fixedRun()
-	status := renderComponentString(t, StatusPage(rs, "/s"))
+	// base "" = a page at the artifacts root; hrefs stay root-relative, so
+	// these goldens are unchanged by the base-prefix mechanism.
+	status := renderComponentString(t, StatusPage(rs, "/s", ""))
 	assertGolden(t, "status_page.golden.html", status)
 	// contract sanity independent of golden bytes:
 	for _, must := range []string{"refresh", "class=\"page\"", "alpha", "work-group", "glyph pass", "glyph fail"} {
@@ -67,13 +69,32 @@ func TestStatusAndFinalGoldens(t *testing.T) {
 			t.Errorf("status page missing %q", must)
 		}
 	}
-	final := renderComponentString(t, FinalReportPage(rs, "/s"))
+	final := renderComponentString(t, FinalReportPage(rs, "/s", ""))
 	assertGolden(t, "final_report.golden.html", final)
 	if strings.Contains(final, "http-equiv=\"refresh\"") {
 		t.Error("final report must not self-refresh")
 	}
 	if !strings.Contains(final, "is-primary") {
 		t.Error("final report work section must be primary")
+	}
+}
+
+// TestPageBasePrefixesRelativeHrefs locks the live-page 404 fix: deliverable/
+// wrapper hrefs are artifacts-root-relative, so a page served from a
+// subdirectory (live/<run_name>.html, versions/<name>/<id>.html) must prepend
+// its base prefix or every link resolves one+ dirs too deep and 404s.
+func TestPageBasePrefixesRelativeHrefs(t *testing.T) {
+	rs := fixedRun()
+	root := renderComponentString(t, StatusPage(rs, "/s", ""))
+	if !strings.Contains(root, `href="view/`) {
+		t.Fatalf("root page should carry root-relative view/ hrefs")
+	}
+	deep := renderComponentString(t, StatusPage(rs, "/s", "../"))
+	if !strings.Contains(deep, `href="../view/`) {
+		t.Errorf("a one-dir-deep page must prefix hrefs with ../ (the live/ 404 fix)")
+	}
+	if strings.Contains(deep, `href="view/`) {
+		t.Errorf("a deep page must not emit un-prefixed view/ hrefs — they 404 from live/")
 	}
 }
 

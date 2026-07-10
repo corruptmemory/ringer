@@ -87,6 +87,25 @@ func (w *Writer) versionPath(rs state.RunState) string {
 	return filepath.Join(artifact.ArtifactsDir(w.stateDir), "versions", artifact.SanitizeName(rs.RunName), artifact.SanitizeName(rs.RunID)+".html")
 }
 
+// baseFor returns the relative prefix ("", "../", "../../", …) from a page's
+// on-disk location back to the artifacts root. Deliverable/wrapper hrefs are
+// artifacts-root-relative, so a page one dir deep (live/<run_name>.html) must
+// prepend "../" and one two dirs deep (versions/<run_name>/<run_id>.html)
+// "../../" to reach them — matching Python's page_path resolution, and correct
+// for both the HUD's /artifacts/ HTTP serving and file:// opening. Falls back
+// to "" for a page outside the artifacts root (a custom out-of-tree config).
+func (w *Writer) baseFor(pagePath string) string {
+	rel, err := filepath.Rel(artifact.ArtifactsDir(w.stateDir), pagePath)
+	if err != nil {
+		return ""
+	}
+	rel = filepath.ToSlash(rel)
+	if strings.HasPrefix(rel, "../") {
+		return ""
+	}
+	return strings.Repeat("../", strings.Count(rel, "/"))
+}
+
 // renderFile writes c to path, creating parent directories as needed. Any
 // failure (mkdir/create/render) is Warn-logged and swallowed — rendering one
 // page must never abort the rest of the tree.
@@ -111,8 +130,9 @@ func (w *Writer) renderFile(path string, c templ.Component) {
 // library.json live-state update to once per 5s for an unchanged outcome.
 // Never fatal — every failure is Warn-logged.
 func (w *Writer) Live(rs state.RunState) {
-	w.renderFile(w.outPath(rs), views.StatusPage(rs, w.stateDir))
-	w.renderFile(w.livePath(rs), views.StatusPage(rs, w.stateDir))
+	out, live := w.outPath(rs), w.livePath(rs)
+	w.renderFile(out, views.StatusPage(rs, w.stateDir, w.baseFor(out)))
+	w.renderFile(live, views.StatusPage(rs, w.stateDir, w.baseFor(live)))
 	w.writeIndex()
 	w.updateLibraryLive(rs)
 }
@@ -123,11 +143,11 @@ func (w *Writer) Live(rs state.RunState) {
 // run's library version (once), and refreshes the all-runs index. Never
 // fatal — every failure is Warn-logged.
 func (w *Writer) Finish(rs state.RunState) {
-	report := views.FinalReportPage(rs, w.stateDir)
-	w.renderFile(w.outPath(rs), report)
-	w.renderFile(w.livePath(rs), report)
-	w.renderFile(w.reportPath(rs), report)
-	w.renderFile(w.versionPath(rs), report)
+	out, live, report, version := w.outPath(rs), w.livePath(rs), w.reportPath(rs), w.versionPath(rs)
+	w.renderFile(out, views.FinalReportPage(rs, w.stateDir, w.baseFor(out)))
+	w.renderFile(live, views.FinalReportPage(rs, w.stateDir, w.baseFor(live)))
+	w.renderFile(report, views.FinalReportPage(rs, w.stateDir, w.baseFor(report)))
+	w.renderFile(version, views.FinalReportPage(rs, w.stateDir, w.baseFor(version)))
 	w.writeWrappers(rs)
 	w.appendVersion(rs)
 	w.writeIndex()

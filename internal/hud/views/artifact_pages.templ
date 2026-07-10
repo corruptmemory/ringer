@@ -25,8 +25,13 @@ templ pageHead(title string, refreshSeconds int) {
 // StatusPage is the self-refreshing (2s) live artifact page (port of
 // render_status_html, ringer.py:3451-3488): corner header, live briefing,
 // progress bar, work section, and a footer noting the page keeps updating
-// itself.
-templ StatusPage(rs state.RunState, stateDir string) {
+// itself. base is the relative prefix from THIS page's on-disk location back
+// to the artifacts root ("" for a root page, "../" for live/<run_name>.html,
+// "../../" for versions/<run_name>/<run_id>.html); every deliverable/wrapper
+// href is artifacts-root-relative, so the page must prepend base to reach
+// them from its own directory (matches Python's page_path resolution — both
+// http /artifacts/... and file:// opening rely on it).
+templ StatusPage(rs state.RunState, stateDir, base string) {
 	<!doctype html>
 	<html lang="en">
 		@pageHead("ringer · "+rs.RunName, 2)
@@ -35,7 +40,7 @@ templ StatusPage(rs state.RunState, stateDir string) {
 				@artifactCorner(rs, true)
 				@briefingHeading(rs, true)
 				@progressBar(rs)
-				@workSection(rs, stateDir, false)
+				@workSection(rs, stateDir, base, false)
 				<footer>Updated by ringer · this page refreshes while the work runs.</footer>
 			</div>
 		</body>
@@ -46,7 +51,7 @@ templ StatusPage(rs state.RunState, stateDir string) {
 // render_final_report_html, ringer.py:3489-3531): no refresh, the final
 // (non-live) corner + briefing, and a primary (.work.is-primary) work
 // section.
-templ FinalReportPage(rs state.RunState, stateDir string) {
+templ FinalReportPage(rs state.RunState, stateDir, base string) {
 	<!doctype html>
 	<html lang="en">
 		@pageHead("ringer report · "+rs.RunName, 0)
@@ -55,7 +60,7 @@ templ FinalReportPage(rs state.RunState, stateDir string) {
 				@artifactCorner(rs, false)
 				@briefingHeading(rs, false)
 				@progressBar(rs)
-				@workSection(rs, stateDir, true)
+				@workSection(rs, stateDir, base, true)
 				<footer>Finished by ringer.</footer>
 			</div>
 		</body>
