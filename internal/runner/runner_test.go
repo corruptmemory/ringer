@@ -382,6 +382,24 @@ func TestRunInterruptedTearsDownCleanly(t *testing.T) {
 	}
 }
 
+func TestRunPopulatesTaskTiming(t *testing.T) {
+	ringerBin := buildRingerBinary(t)
+	stateDir := t.TempDir()
+	m := &manifest.Manifest{RunName: "timing", Workdir: filepath.Join(t.TempDir(), "w"),
+		Tasks: []manifest.Task{{Key: "a", Engine: "mock", TimeoutS: 30, Spec: "MOCK_FILE: a.txt\nhi\nMOCK_END", Check: "test -f a.txt", ExpectFiles: []string{"a.txt"}}}}
+	engines := map[string]config.EngineConfig{"mock": {Bin: ringerBin, ArgsTemplate: []string{"mock-worker", "{spec}"}}}
+	res, err := Run(context.Background(), Options{Manifest: m, Engines: engines, StateDir: stateDir, Identity: "j", Stdout: io.Discard, Logger: logging.Default()})
+	if err != nil || !res.AllPassed {
+		t.Fatalf("run: err=%v res=%+v", err, res)
+	}
+	data, _ := os.ReadFile(filepath.Join(stateDir, "runs", res.RunID+".json"))
+	var s state.RunState
+	_ = json.Unmarshal(data, &s)
+	if s.Tasks[0].StartedAt == "" || s.Tasks[0].EndedAt == "" {
+		t.Fatalf("task timing not populated: %+v", s.Tasks[0])
+	}
+}
+
 func TestCapTail(t *testing.T) {
 	if got := capTail("short", 6000); got != "short" {
 		t.Fatalf("short input mangled: %q", got)
