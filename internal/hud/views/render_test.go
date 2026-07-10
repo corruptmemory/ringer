@@ -50,6 +50,11 @@ func TestTaskElapsedAndFormat(t *testing.T) {
 	if TaskElapsed(state.TaskView{StartedAt: "2026-07-09T00:00:00Z"}) != 0 {
 		t.Fatal("unfinished task elapsed must be 0")
 	}
+	// A never-started-but-failed task (EndedAt set, StartedAt "") reads 0 too,
+	// not a huge/negative number (runner early-exit failures stamp EndedAt only).
+	if TaskElapsed(state.TaskView{EndedAt: "2026-07-09T00:00:00Z"}) != 0 {
+		t.Fatal("never-started (empty StartedAt) task elapsed must be 0")
+	}
 	if got := FormatDuration(63); got != "1m 03s" {
 		t.Fatalf("FormatDuration(63) = %q, want \"1m 03s\"", got)
 	}
