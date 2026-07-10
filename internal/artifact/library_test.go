@@ -3,6 +3,7 @@ package artifact
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -30,6 +31,13 @@ func TestReadWriteLibraryRoundTrip(t *testing.T) {
 	if got.Artifacts["demo"].State != "pass" || len(got.Artifacts["demo"].Versions) != 1 || got.Artifacts["demo"].Versions[0].TasksPass != 3 {
 		t.Fatalf("round-trip lost fields: %+v", got.Artifacts["demo"])
 	}
+	v := got.Artifacts["demo"].Versions[0]
+	if len(v.Deliverables) != 1 || v.Deliverables[0].Name != "out.txt" || v.Deliverables[0].Bytes != 12 || v.Deliverables[0].TaskKey != "a" {
+		t.Fatalf("deliverable round-trip lost fields: %+v", v.Deliverables)
+	}
+	if v.ReportPath == nil || *v.ReportPath != report {
+		t.Fatalf("report_path pointer round-trip wrong: %v", v.ReportPath)
+	}
 	raw, _ := os.ReadFile(LibraryPath(dir))
 	var probe map[string]any
 	_ = json.Unmarshal(raw, &probe)
@@ -47,5 +55,22 @@ func TestReadLibraryMissingOrGarbageIsEmpty(t *testing.T) {
 	_ = os.WriteFile(LibraryPath(dir), []byte("{ nope"), 0o644)
 	if lib := ReadLibrary(dir); len(lib.Artifacts) != 0 {
 		t.Fatalf("garbage → empty, got %+v", lib)
+	}
+}
+
+func TestReportPathNilMarshalsNull(t *testing.T) {
+	dir := t.TempDir()
+	lib := Library{Artifacts: map[string]Entry{
+		"demo": {State: "pass", Versions: []Version{{RunID: "r1", Path: "/x/r1.html", ReportPath: nil}}},
+	}}
+	if err := WriteLibrary(dir, lib); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(LibraryPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"report_path": null`) {
+		t.Fatalf("nil ReportPath must marshal to JSON null (frozen contract), got:\n%s", raw)
 	}
 }
