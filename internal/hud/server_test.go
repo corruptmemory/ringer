@@ -29,7 +29,7 @@ func TestRootRendersShell(t *testing.T) {
 		`href="/static/ringside.css"`,
 		`src="/static/vendor/htmx.min.js"`,
 		`hx-get="/hud/runs"`,
-		`hx-swap="morph"`,
+		`hx-swap="morph:innerHTML"`,
 		`id="runs-panel"`,
 	} {
 		if !strings.Contains(body, want) {

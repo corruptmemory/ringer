@@ -30,21 +30,21 @@ templ Layout() {
 						class="panel"
 						hx-get="/hud/runs"
 						hx-trigger="load, every 2s"
-						hx-swap="morph"
+						hx-swap="morph:innerHTML"
 					></section>
 					<section
 						id="library-panel"
 						class="panel"
 						hx-get="/hud/library"
 						hx-trigger="load, every 2s"
-						hx-swap="morph"
+						hx-swap="morph:innerHTML"
 					></section>
 					<section
 						id="models-panel"
 						class="panel"
 						hx-get="/hud/models"
 						hx-trigger="load"
-						hx-swap="morph"
+						hx-swap="morph:innerHTML"
 					></section>
 				</main>
 			</div>
