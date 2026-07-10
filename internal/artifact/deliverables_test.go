@@ -106,3 +106,28 @@ func TestHarvestOversizedSkippedWithNote(t *testing.T) {
 		t.Errorf("want 1 oversize note, got %v", notes)
 	}
 }
+
+func TestHarvestCopyFailureNotesAndContinues(t *testing.T) {
+	sd, td := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(td, "a.md"), 3)
+	writeFile(t, filepath.Join(td, "b.md"), 4)
+	// Plant a regular file where the run's deliverables *directory* must be,
+	// so MkdirAll of the per-file destination fails for every file.
+	parent := filepath.Dir(DeliverablesDir(sd, "r", "t")) // .../deliverables/r
+	if err := os.MkdirAll(filepath.Dir(parent), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parent, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, notes, err := HarvestOnPass(sd, "r", "t", td, []string{"a.md", "b.md"}, false)
+	if err != nil {
+		t.Fatalf("per-file copy failure must not be a hard error, got %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("failed copy must not be recorded, got %+v", got)
+	}
+	if len(notes) != 2 {
+		t.Errorf("expected 2 could-not-be-copied notes, got %d: %v", len(notes), notes)
+	}
+}

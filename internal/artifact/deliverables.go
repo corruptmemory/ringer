@@ -61,7 +61,8 @@ func HarvestOnPass(stateDir, runID, taskKey, taskDir string, expectFiles []strin
 		}
 		dst := filepath.Join(targetDir, filepath.Base(src))
 		if err := copyFilePreservingMtime(src, dst); err != nil {
-			return nil, notes, fmt.Errorf("harvest %s: %w", rel, err)
+			notes = append(notes, fmt.Sprintf("%s could not be copied: %v", filepath.Base(src), err))
+			continue
 		}
 		di, _ := os.Stat(dst)
 		var size int64
