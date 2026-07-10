@@ -1,6 +1,7 @@
 package hud
 
 import (
+	"errors"
 	"io"
 	"mime"
 	"net/http"
@@ -32,6 +33,9 @@ func (s *Server) handleArtifacts(w http.ResponseWriter, r *http.Request) {
 	}
 	data, err := os.ReadFile(full)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.lg.Warnf("hud: artifacts read %s: %v", full, err)
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -95,6 +99,9 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	tail, err := tailBytes(logPath, workerLogTailBytes)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.lg.Warnf("hud: logs tail %s: %v", logPath, err)
+		}
 		http.NotFound(w, r)
 		return
 	}
@@ -114,10 +121,14 @@ func (s *Server) taskLogPath(runID, taskKey string) (string, bool) {
 	}
 	data, err := os.ReadFile(candidate)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			s.lg.Warnf("hud: run-state read %s: %v", candidate, err)
+		}
 		return "", false
 	}
 	var rs state.RunState
 	if err := jsonUnmarshal(data, &rs); err != nil {
+		s.lg.Warnf("hud: run-state parse %s: %v", candidate, err)
 		return "", false
 	}
 	for _, t := range rs.Tasks {
