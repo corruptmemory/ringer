@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/corruptmemory/ringer/internal/state"
 )
 
 type Library struct {
@@ -30,12 +32,10 @@ type Version struct {
 	Deliverables []Deliverable `json:"deliverables"`
 }
 
-type Deliverable struct {
-	TaskKey string `json:"task_key"`
-	Name    string `json:"name"`
-	Path    string `json:"path"`
-	Bytes   int64  `json:"bytes"`
-}
+// Deliverable is defined in state (the leaf both artifact and the run-state
+// snapshot share); aliased here so the frozen library.json schema and the
+// existing artifact.Version.Deliverables field are unchanged.
+type Deliverable = state.Deliverable
 
 // ReadLibrary loads library.json, degrading a missing or malformed file to
 // an empty (non-nil) map (mirrors upstream's {"artifacts": {}} fallback).
