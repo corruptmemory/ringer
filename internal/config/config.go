@@ -33,7 +33,7 @@ type EngineConfig struct {
 }
 
 type ArtifactConfig struct {
-	Enabled   bool   `toml:"enabled"`
+	Enabled   *bool  `toml:"enabled"` // nil (absent) -> true, Python parity; see AppConfig.ArtifactEnabled
 	Out       string `toml:"out"`
 	ReportOut string `toml:"report_out"`
 	IndexOut  string `toml:"index_out"`
@@ -85,6 +85,12 @@ func (c *AppConfig) StateDirPath() string {
 		return ".ringer"
 	}
 	return filepath.Join(home, ".ringer")
+}
+
+// ArtifactEnabled resolves the artifact.enabled default: absent -> true
+// (Python parity), explicit `enabled = false` -> false.
+func (c *AppConfig) ArtifactEnabled() bool {
+	return c.Artifact.Enabled == nil || *c.Artifact.Enabled
 }
 
 func (c *AppConfig) DBPath() string {

@@ -38,6 +38,16 @@ func capTail(s string, max int) string {
 	return s[len(s)-max:]
 }
 
+// ArtifactWriter renders the artifact tree from run-state snapshots. Injected
+// by the CLI; nil in headless/test runs (artifacts simply not written). Live
+// is called at every state flush (roughly once per second plus the final
+// flush); Finish is called exactly once, after the run's last state flush,
+// with the final stamped snapshot.
+type ArtifactWriter interface {
+	Live(state.RunState)
+	Finish(state.RunState)
+}
+
 // Options configures a Run. Store may be nil to skip eval logging; Logger nil
 // falls back to logging.Default(); MaxParallel <= 0 means "unbounded" (one
 // goroutine per task).
@@ -46,7 +56,8 @@ type Options struct {
 	Engines     map[string]config.EngineConfig
 	StateDir    string
 	Identity    string
-	Store       *store.Store // may be nil (skip eval logging)
+	Store       *store.Store   // may be nil (skip eval logging)
+	Artifact    ArtifactWriter // may be nil (skip artifact rendering)
 	Stdout      io.Writer
 	Logger      logging.Logger   // nil -> logging.Default()
 	MaxParallel int              // 0 -> len(tasks)
@@ -130,7 +141,7 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 		}
 	}()
 
-	writeState := func(done bool) {
+	writeState := func(done bool) state.RunState {
 		s := a.snapshot()
 		s.PID = os.Getpid()
 		s.StartedAt = startedAt
@@ -139,6 +150,10 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 		if err := state.WriteRunState(opts.StateDir, s); err != nil {
 			lg.Warnf("run %s: write state: %v", runID, err)
 		}
+		if opts.Artifact != nil {
+			opts.Artifact.Live(s)
+		}
+		return s
 	}
 
 	flushDone := make(chan struct{})
@@ -178,8 +193,11 @@ func Run(ctx context.Context, opts Options) (RunResult, error) {
 	wg.Wait()
 
 	close(flushDone)
-	<-tickerDone     // join: guarantees no in-flight writeState(false) can land after the final write below
-	writeState(true) // final flush, Done=true
+	<-tickerDone                  // join: guarantees no in-flight writeState(false) can land after the final write below
+	finalSnap := writeState(true) // final flush, Done=true
+	if opts.Artifact != nil {
+		opts.Artifact.Finish(finalSnap)
+	}
 
 	// Result from the authoritative actor snapshot.
 	snap := a.snapshot()

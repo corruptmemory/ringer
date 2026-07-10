@@ -416,6 +416,51 @@ func TestRunPopulatesTaskTiming(t *testing.T) {
 	}
 }
 
+// fakeArtifact is a nil-safety/wiring probe for Options.Artifact: it counts
+// Live/Finish calls instead of rendering anything.
+type fakeArtifact struct{ live, finish int }
+
+func (f *fakeArtifact) Live(state.RunState)   { f.live++ }
+func (f *fakeArtifact) Finish(state.RunState) { f.finish++ }
+
+// TestRunnerCallsArtifactWriter proves the runner's Artifact hook actually
+// fires: Live at least once (the mandatory final flush, since a fast mock
+// run may finish before the 1s ticker ever ticks) and Finish exactly once,
+// with the run-state snapshot Finish receives already marked Done.
+func TestRunnerCallsArtifactWriter(t *testing.T) {
+	ringerBin := buildRingerBinary(t)
+	workdir := t.TempDir()
+	stateDir := t.TempDir()
+
+	m := &manifest.Manifest{
+		RunName: "artifact-hook", Workdir: workdir, MaxParallel: 1,
+		Tasks: []manifest.Task{
+			{Key: "a", Engine: "mock", TimeoutS: 30,
+				Spec: "MOCK_FILE: a.txt\nhi\nMOCK_END", Check: "test -f a.txt", ExpectFiles: []string{"a.txt"}},
+		},
+	}
+	engines := map[string]config.EngineConfig{
+		"mock": {Bin: ringerBin, ArgsTemplate: []string{"mock-worker", "{spec}"}},
+	}
+	fa := &fakeArtifact{}
+	res, err := Run(context.Background(), Options{
+		Manifest: m, Engines: engines, StateDir: stateDir, Identity: "test",
+		Stdout: io.Discard, Logger: logging.Default(), Artifact: fa,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.AllPassed {
+		t.Fatalf("expected all pass, got %+v", res.Results)
+	}
+	if fa.finish != 1 {
+		t.Errorf("Finish should be called exactly once, got %d", fa.finish)
+	}
+	if fa.live < 1 {
+		t.Errorf("Live should be called at least once (final flush), got %d", fa.live)
+	}
+}
+
 func TestCapTail(t *testing.T) {
 	if got := capTail("short", 6000); got != "short" {
 		t.Fatalf("short input mangled: %q", got)
