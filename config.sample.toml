@@ -163,8 +163,12 @@ token_regex = "tokens\\s+used\\s*:?\\s*([0-9][0-9,]*)"
 #     timings, attempts/retries, check output, links to each task's worker.log/report files.
 #   - `index_out`: a single multi-run index listing every run under state_dir (handy when
 #     several swarms run at once).
-# Templates support {run_id} and {run_name} substitution. Disable with --no-artifact.
+# Templates support {run_id} and {run_name} substitution. enabled defaults to
+# true (absent section == enabled); set enabled = false to run headless with
+# no artifact pages at all (no per-run HTML, no library.json, no HUD library
+# panel entries). The three paths below are shown at their defaults —
+# uncomment only to relocate them.
 enabled = true
-out = "~/.ringer/artifacts/{run_id}.html"
-report_out = "~/.ringer/artifacts/{run_id}-report.html"
-index_out = "~/.ringer/artifacts/index.html"
+# out        = "~/.ringer/artifacts/{run_id}.html"
+# report_out = "~/.ringer/artifacts/{run_id}-report.html"
+# index_out  = "~/.ringer/artifacts/index.html"
