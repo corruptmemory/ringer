@@ -1,0 +1,59 @@
+package views
+
+import "github.com/corruptmemory/ringer/internal/state"
+
+// pageHead is the shared <head> for both artifact pages: charset, the CSP
+// meta (Task 6), an optional self-refresh meta the status page uses and the
+// final report doesn't, the page title, and the embedded artifact CSS
+// (Task 6).
+templ pageHead(title string, refreshSeconds int) {
+	<head>
+		<meta charset="utf-8"/>
+		@templ.Raw(CSPMeta)
+		if refreshSeconds > 0 {
+			<meta http-equiv="refresh" content={ intToString(refreshSeconds) }/>
+		}
+		<title>{ title }</title>
+		@templ.Raw("<style>" + ArtifactCSS + "</style>")
+	</head>
+}
+
+// StatusPage is the self-refreshing (2s) live artifact page (port of
+// render_status_html, ringer.py:3451-3488): corner header, live briefing,
+// progress bar, work section, and a footer noting the page keeps updating
+// itself.
+templ StatusPage(rs state.RunState, stateDir string) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer · "+rs.RunName, 2)
+		<body>
+			<div class="page">
+				@artifactCorner(rs, true)
+				@briefingHeading(rs, true)
+				@progressBar(rs)
+				@workSection(rs, stateDir, false)
+				<footer>Updated by ringer · this page refreshes while the work runs.</footer>
+			</div>
+		</body>
+	</html>
+}
+
+// FinalReportPage is the frozen, self-contained final report (port of
+// render_final_report_html, ringer.py:3489-3531): no refresh, the final
+// (non-live) corner + briefing, and a primary (.work.is-primary) work
+// section.
+templ FinalReportPage(rs state.RunState, stateDir string) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer report · "+rs.RunName, 0)
+		<body>
+			<div class="page">
+				@artifactCorner(rs, false)
+				@briefingHeading(rs, false)
+				@progressBar(rs)
+				@workSection(rs, stateDir, true)
+				<footer>Finished by ringer.</footer>
+			</div>
+		</body>
+	</html>
+}

@@ -5,11 +5,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/corruptmemory/ringer/internal/artifact"
 	"github.com/corruptmemory/ringer/internal/state"
 )
+
+// intToString lets pageHead (artifact_pages.templ) plug an int into a templ
+// string-typed attribute value (the <meta http-equiv="refresh"> content).
+func intToString(n int) string { return strconv.Itoa(n) }
 
 // BriefingLive is the status page's plain-language heading (port of
 // live_briefing_html, ringer.py:3013-3034): e.g. "Ringer is working on 2
