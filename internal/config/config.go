@@ -43,6 +43,11 @@ type EvalConfig struct {
 	DBPath string `toml:"db_path"` // empty -> <state_dir>/ringer.db
 }
 
+type ScoreboardConfig struct {
+	ModelIdentityPath string `toml:"model_identity_path"` // empty -> embedded registry/model-identity.toml
+	ModelNotesPath    string `toml:"model_notes_path"`    // empty -> embedded docs/MODEL-NOTES.md
+}
+
 type AppConfig struct {
 	IdentityDefault string                  `toml:"identity_default"`
 	StateDir        string                  `toml:"state_dir"` // empty -> ~/.ringer
@@ -50,6 +55,7 @@ type AppConfig struct {
 	Logging         LoggingConfig           `toml:"logging"`
 	Eval            EvalConfig              `toml:"eval"`
 	Artifact        ArtifactConfig          `toml:"artifact"`
+	Scoreboard      ScoreboardConfig        `toml:"scoreboard"`
 	Engines         map[string]EngineConfig `toml:"engines"`
 }
 
@@ -98,6 +104,23 @@ func (c *AppConfig) DBPath() string {
 		return ExpandUser(c.Eval.DBPath)
 	}
 	return filepath.Join(c.StateDirPath(), "ringer.db")
+}
+
+// ModelIdentityPath returns the expanded override path for the identity
+// registry, or "" to signal "use the embedded default".
+func (c *AppConfig) ModelIdentityPath() string {
+	if c.Scoreboard.ModelIdentityPath == "" {
+		return ""
+	}
+	return ExpandUser(c.Scoreboard.ModelIdentityPath)
+}
+
+// ModelNotesPath is the override for MODEL-NOTES, or "" for the embedded default.
+func (c *AppConfig) ModelNotesPath() string {
+	if c.Scoreboard.ModelNotesPath == "" {
+		return ""
+	}
+	return ExpandUser(c.Scoreboard.ModelNotesPath)
 }
 
 func Load(path string) (*AppConfig, error) {
