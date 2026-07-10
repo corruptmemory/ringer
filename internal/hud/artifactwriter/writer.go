@@ -133,6 +133,11 @@ func (w *Writer) Live(rs state.RunState) {
 	out, live := w.outPath(rs), w.livePath(rs)
 	w.renderFile(out, views.StatusPage(rs, w.stateDir, w.baseFor(out)))
 	w.renderFile(live, views.StatusPage(rs, w.stateDir, w.baseFor(live)))
+	// Wrappers for already-passed tasks too, not just at Finish: the live page
+	// shows deliverable/log links as each task completes, so their target
+	// wrapper pages must exist mid-run or the links 404 until the whole run
+	// finishes (matches Python, which writes wrappers during status render).
+	w.writeWrappers(rs)
 	w.writeIndex()
 	w.updateLibraryLive(rs)
 }

@@ -54,6 +54,39 @@ func TestWriterLiveThenFinishProducesTree(t *testing.T) {
 	}
 }
 
+// TestLiveWritesWrappersForPassedTasks locks that deliverable/log wrapper
+// pages are written during Live, not only at Finish — otherwise a live page's
+// deliverable link 404s until the whole run completes.
+func TestLiveWritesWrappersForPassedTasks(t *testing.T) {
+	sd := t.TempDir()
+	lg, _ := logging.New(logging.Config{Level: 0})
+	w := New(sd, DefaultConfig(sd), lg)
+
+	art := artifact.ArtifactsDir(sd)
+	delPath := filepath.Join(art, "deliverables/run-1/alpha/notes.md")
+	if err := os.MkdirAll(filepath.Dir(delPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(delPath, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Still-live run (Done:false): alpha already passed + harvested; beta runs.
+	rs := state.RunState{RunID: "run-1", RunName: "demo", Identity: "id", Done: false,
+		StartedAt: "2026-07-10T10:00:00Z", UpdatedAt: "2026-07-10T10:00:06Z",
+		Tasks: []state.TaskView{
+			{Key: "alpha", Status: "passed", StartedAt: "2026-07-10T10:00:00Z", EndedAt: "2026-07-10T10:00:05Z",
+				Deliverables: []state.Deliverable{{TaskKey: "alpha", Name: "notes.md", Path: delPath, Bytes: 5}}},
+			{Key: "beta", Status: "running", StartedAt: "2026-07-10T10:00:00Z"},
+		}}
+	w.Live(rs)
+
+	wp := filepath.Join(art, views.WrapperRelPath(rs.RunID, "alpha", "notes.md"))
+	if _, err := os.Stat(wp); err != nil {
+		t.Errorf("Live must write a passed task's deliverable wrapper so the live link resolves mid-run: %v", err)
+	}
+}
+
 // TestFinishEscapesDeliverableNameInMetaLine locks writeWrappers' MetaLine
 // construction (html.EscapeString(d.Name) in writer.go): a deliverable name
 // carrying HTML metacharacters must reach the wrapper page escaped, never
