@@ -1,9 +1,13 @@
 package views
 
 import (
+	"encoding/base64"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/corruptmemory/ringer/internal/artifact"
 	"github.com/corruptmemory/ringer/internal/state"
 )
 
@@ -164,4 +168,249 @@ func pluralUnit(n int, unit string) string {
 		return fmt.Sprintf("%d %s", n, unit)
 	}
 	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// --- Deliverable classification, href, and text helpers (Task 8) ---
+//
+// Ports ringer.py's work-item classification (work_label_and_kind
+// ringer.py:3394-3407, is_text/image_deliverable 3410-3415, image_data_uri
+// 3418-3427) and the text-wrapper page title (deliverable_title 2738-2745).
+
+var textDeliverableSuffixes = map[string]bool{".md": true, ".txt": true, ".log": true}
+var imageDeliverableSuffixes = map[string]bool{".avif": true, ".gif": true, ".jpeg": true, ".jpg": true, ".png": true, ".svg": true, ".webp": true}
+
+// imageMimeExtensions maps an image deliverable's suffix to its data-URI
+// MIME type (port of image_data_uri's mimetypes.guess_type step,
+// ringer.py:3423). Fixed to imageDeliverableSuffixes rather than delegating
+// to Go's mime.TypeByExtension, which on some platforms consults system
+// mime.types files — a fixed table keeps ImageDataURI's output identical on
+// every machine (and every golden-file test run).
+var imageMimeExtensions = map[string]string{
+	".avif": "image/avif",
+	".gif":  "image/gif",
+	".jpeg": "image/jpeg",
+	".jpg":  "image/jpeg",
+	".png":  "image/png",
+	".svg":  "image/svg+xml",
+	".webp": "image/webp",
+}
+
+func IsTextDeliverable(name string) bool {
+	return textDeliverableSuffixes[strings.ToLower(filepath.Ext(name))]
+}
+func IsImageDeliverable(name string) bool {
+	return imageDeliverableSuffixes[strings.ToLower(filepath.Ext(name))]
+}
+
+// DeliverableKind labels a deliverable for the results page (port of
+// work_label_and_kind's kind half, ringer.py:3394-3407).
+func DeliverableKind(name string) string {
+	switch ext := strings.ToLower(filepath.Ext(name)); {
+	case ext == ".html" || ext == ".htm":
+		return "web page"
+	case imageDeliverableSuffixes[ext]:
+		return "image"
+	case textDeliverableSuffixes[ext]:
+		return "document"
+	default:
+		return "download"
+	}
+}
+
+// deliverableLabel builds a work-item's link text: a prettified filename
+// stem plus its kind (port of work_label_and_kind's label half,
+// ringer.py:3394-3407) — e.g. "Chart — image", or "Work — download" for an
+// extension-only name.
+func deliverableLabel(name string) string {
+	return prettyStem(name) + " — " + DeliverableKind(name)
+}
+
+// stemOf returns name's filename stem — the final path element minus its
+// last extension — mirroring Python's Path(name).stem, including its ""
+// -> "" edge case that filepath.Base's Go-specific "." fallback would
+// otherwise mask for an empty name.
+func stemOf(name string) string {
+	if name == "" {
+		return ""
+	}
+	base := filepath.Base(name)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
+// prettyStem replaces "_"/"-" with spaces and upper-cases only the first
+// rune (the rest is untouched), defaulting to "Work" for an empty stem —
+// mirrors work_label_and_kind's `stem[:1].upper() + stem[1:]`
+// (ringer.py:3396-3397).
+func prettyStem(name string) string {
+	stem := strings.TrimSpace(strings.NewReplacer("_", " ", "-", " ").Replace(stemOf(name)))
+	if stem == "" {
+		return "Work"
+	}
+	r := []rune(stem)
+	return strings.ToUpper(string(r[0])) + string(r[1:])
+}
+
+// deliverableReportNames mirrors TASK_REPORT_FILENAMES (ringer.py:67):
+// report.md takes priority over report.html when a task produced both.
+var deliverableReportNames = []string{"report.md", "report.html"}
+
+// DeliverableTitle labels a deliverable for its text-wrapper page heading
+// (port of deliverable_title, ringer.py:2738-2745): worker.log -> "Work
+// log"; a task report -> "What this worker produced"; else a
+// Python-str.capitalize()-style prettified stem ("my_notes.md" -> "My
+// notes"), or "Worker output" for an empty stem.
+func DeliverableTitle(name string) string {
+	lower := strings.ToLower(name)
+	if lower == "worker.log" {
+		return "Work log"
+	}
+	for _, report := range deliverableReportNames {
+		if lower == report {
+			return "What this worker produced"
+		}
+	}
+	stem := strings.TrimSpace(strings.NewReplacer("_", " ", "-", " ").Replace(stemOf(name)))
+	if stem == "" {
+		return "Worker output"
+	}
+	return pyCapitalize(stem)
+}
+
+// pyCapitalize mirrors Python's str.capitalize(): upper-case the first
+// rune, lower-case the rest.
+func pyCapitalize(s string) string {
+	r := []rune(s)
+	return strings.ToUpper(string(r[0])) + strings.ToLower(string(r[1:]))
+}
+
+// WrapperRelPath is a text deliverable's wrapper-page path relative to the
+// artifacts dir: view/<sanitize(runID)>/<sanitize(taskKey)>--<sanitize(sourceName)>.html.
+func WrapperRelPath(runID, taskKey, sourceName string) string {
+	return filepath.ToSlash(filepath.Join("view", artifact.SanitizeName(runID),
+		artifact.SanitizeName(taskKey)+"--"+artifact.SanitizeName(sourceName)+".html"))
+}
+
+// DeliverableHref returns the artifacts-dir-relative link for a deliverable:
+// a text deliverable links to its wrapper page; anything else links to the
+// raw copied file. Both are relative to the artifacts dir so the link
+// resolves the same over HTTP (`/artifacts/…`) and opened straight off disk
+// (`file://…`).
+func DeliverableHref(d state.Deliverable, runID, stateDir string) string {
+	if IsTextDeliverable(d.Name) {
+		return WrapperRelPath(runID, d.TaskKey, d.Name)
+	}
+	rel, err := filepath.Rel(artifact.ArtifactsDir(stateDir), d.Path)
+	if err != nil {
+		return d.Path
+	}
+	return filepath.ToSlash(rel)
+}
+
+// ImageDataURI reads a deliverable image and returns a data: URI for inline
+// thumbnailing, or "" on a read error or an oversized file (port of
+// image_data_uri, ringer.py:3418-3427). Python's image_data_uri itself has
+// no size guard; deliverables are already capped at
+// artifact.DeliverableMaxBytes (20 MiB) when harvested
+// (internal/artifact/deliverables.go skips anything bigger), and
+// ImageDataURI re-checks that same cap directly so a huge file read
+// straight off disk is never base64-inlined into the page.
+func ImageDataURI(path string) string {
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > artifact.DeliverableMaxBytes {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	mimeType, ok := imageMimeExtensions[strings.ToLower(filepath.Ext(path))]
+	if !ok {
+		mimeType = "application/octet-stream"
+	}
+	return fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data))
+}
+
+// emptyWorkNote is the per-bucket "nothing here yet" copy for a task with no
+// deliverables (port of render_work_group's rows-empty branch,
+// ringer.py:3259-3268).
+func emptyWorkNote(kind string) string {
+	switch kind {
+	case "pass":
+		return "Finished and checked — this worker filed nothing to the shelf."
+	case "fail":
+		return "Failed its check — nothing was delivered."
+	case "working", "retry":
+		return "Nothing delivered yet — still on it."
+	default:
+		return "Waiting its turn."
+	}
+}
+
+// showVerified/verifiedLabel and showProof/proofLabel gate and word the
+// verification-proof drawer, restricted to pass/fail buckets (port of
+// render_work_group's verified_html construction, ringer.py:3274-3286). The
+// gate matters for a "retry" task: its Verified/CheckTail still holds the
+// FAILED first attempt (opSetResult isn't cleared by the retry's
+// opSetStatus — see internal/runner/actor.go), so without the gate a
+// mid-retry task would show attempt 1's stale verdict while attempt 2 runs.
+
+func showVerified(t state.TaskView) bool {
+	kind := TaskKind(t)
+	return (kind == "pass" || kind == "fail") && strings.TrimSpace(t.Verified) != ""
+}
+
+func verifiedLabel(t state.TaskView) string {
+	how := "How it was checked"
+	if TaskKind(t) == "fail" {
+		how = "What the check demanded"
+	}
+	return how + ": " + strings.TrimSpace(t.Verified)
+}
+
+func showProof(t state.TaskView) bool {
+	kind := TaskKind(t)
+	return (kind == "pass" || kind == "fail") && strings.TrimSpace(t.CheckTail) != ""
+}
+
+func proofLabel(t state.TaskView) string {
+	if TaskKind(t) == "fail" {
+		return "See why it failed"
+	}
+	return "See the proof"
+}
+
+func proofText(t state.TaskView) string { return strings.TrimSpace(t.CheckTail) }
+
+// taskLink is one entry in a task's link row.
+type taskLink struct {
+	text, href string
+}
+
+// taskLinkItems computes a task's link row (port of render_task_links,
+// ringer.py:3532-3591): "Read what it found" when a report.md/report.html
+// deliverable exists (report.md wins if a task somehow produced both), then
+// "view the work log" when the task has a log.
+func taskLinkItems(runID string, t state.TaskView, stateDir string) []taskLink {
+	var links []taskLink
+	if d, ok := findReportDeliverable(t.Deliverables); ok {
+		links = append(links, taskLink{text: "Read what it found", href: DeliverableHref(d, runID, stateDir)})
+	}
+	if t.LogPath != "" {
+		links = append(links, taskLink{text: "view the work log", href: WrapperRelPath(runID, t.Key, "worker.log")})
+	}
+	return links
+}
+
+// findReportDeliverable returns the first deliverable named report.md or
+// report.html (in that priority order), mirroring TASK_REPORT_FILENAMES'
+// iteration order in render_task_links (ringer.py:3563-3575).
+func findReportDeliverable(ds []state.Deliverable) (state.Deliverable, bool) {
+	for _, name := range deliverableReportNames {
+		for _, d := range ds {
+			if d.Name == name {
+				return d, true
+			}
+		}
+	}
+	return state.Deliverable{}, false
 }
