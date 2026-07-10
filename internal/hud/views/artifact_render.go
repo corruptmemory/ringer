@@ -3,6 +3,7 @@ package views
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -482,4 +483,89 @@ func StatusColor(state string) string {
 		return c
 	}
 	return "var(--waiting)"
+}
+
+// --- Text file-wrapper page (Task 11) ---
+//
+// Ports render_file_wrapper_html/write_wrapper (ringer.py:2843-2926): a
+// standalone page wrapping a text deliverable or the worker log in <pre>,
+// showing only the last ArtifactWrapperTailBytes when the file is larger.
+// Images are never wrapped — they link raw (see DeliverableHref above).
+
+// WrapperData holds FileWrapperPage's rendered fields (artifact_pages.templ).
+// MetaLine is rendered as trusted HTML (@templ.Raw) so TruncationBanner's
+// <b> tags work; Content goes through templ's normal auto-escaping.
+type WrapperData struct {
+	RunName, TaskKey, Title, MetaLine, Content string
+}
+
+// ArtifactWrapperTailBytes caps how much of a text deliverable (or the
+// worker log) the file-wrapper page shows: the last 256 KiB (port of
+// ARTIFACT_WRAPPER_TAIL_BYTES, ringer.py:63).
+const ArtifactWrapperTailBytes = 256 * 1024
+
+// ReadTail reads a text file for the wrapper page (port of the read half of
+// render_file_wrapper_html, ringer.py:2875-2882): the full file size,
+// whether it exceeds max (and so was truncated), and the last max bytes
+// (the whole file when it's smaller) decoded as UTF-8 with invalid bytes
+// replaced. Errors reading the file are surfaced as an empty tail rather
+// than a panic — the caller (Task 12) is expected to have already confirmed
+// the file exists via the deliverable/log path it resolved.
+func ReadTail(path string, max int) (content string, size int64, truncated bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, false
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "", 0, false
+	}
+	size = info.Size()
+	truncated = size > int64(max)
+	start := int64(0)
+	if truncated {
+		start = size - int64(max)
+		if _, err := f.Seek(start, 0); err != nil {
+			return "", size, truncated
+		}
+	}
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return "", size, truncated
+	}
+	return strings.ToValidUTF8(string(raw), "�"), size, truncated
+}
+
+// TruncationBanner is the wrapper page's "showing the last N bytes" note
+// (port of render_file_wrapper_html's truncation_note, ringer.py:2886-2891):
+// comma-grouped byte counts wrapped in <b> tags. Both numbers are integers
+// formatted by commaInt, so the result is safe to render as trusted HTML
+// (see WrapperData.MetaLine above).
+func TruncationBanner(size int64) string {
+	return fmt.Sprintf(" Showing the last <b>%s</b> bytes of <b>%s</b>.",
+		commaInt(int64(ArtifactWrapperTailBytes)), commaInt(size))
+}
+
+// commaInt formats n with thousands separators (e.g. 262144 -> "262,144"),
+// mirroring Python's f"{n:,}" for the non-negative byte counts
+// TruncationBanner uses it for.
+func commaInt(n int64) string {
+	s := strconv.FormatInt(n, 10)
+	neg := strings.HasPrefix(s, "-")
+	if neg {
+		s = s[1:]
+	}
+	var out []byte
+	for i, c := range []byte(s) {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, c)
+	}
+	if neg {
+		return "-" + string(out)
+	}
+	return string(out)
 }

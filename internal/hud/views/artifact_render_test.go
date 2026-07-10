@@ -72,6 +72,14 @@ func TestDeliverableTitle(t *testing.T) {
 	}
 }
 
+func TestTruncationBanner(t *testing.T) {
+	got := TruncationBanner(1234567)
+	want := " Showing the last <b>262,144</b> bytes of <b>1,234,567</b>."
+	if got != want {
+		t.Errorf("TruncationBanner(1234567) = %q, want %q", got, want)
+	}
+}
+
 func TestImageDataURI(t *testing.T) {
 	dir := t.TempDir()
 	png := filepath.Join(dir, "chart.png")

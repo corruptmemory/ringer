@@ -77,6 +77,45 @@ func TestStatusAndFinalGoldens(t *testing.T) {
 	}
 }
 
+func TestReadTailTruncates(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "big.log")
+	big := make([]byte, ArtifactWrapperTailBytes+100)
+	for i := range big {
+		big[i] = 'x'
+	}
+	copy(big[len(big)-3:], []byte("END"))
+	_ = os.WriteFile(p, big, 0o644)
+	content, size, truncated := ReadTail(p, ArtifactWrapperTailBytes)
+	if !truncated || size != int64(len(big)) {
+		t.Fatalf("truncated=%v size=%d", truncated, size)
+	}
+	if len(content) != ArtifactWrapperTailBytes || !strings.HasSuffix(content, "END") {
+		t.Errorf("tail wrong: len=%d", len(content))
+	}
+}
+
+func TestFileWrapperGolden(t *testing.T) {
+	d := WrapperData{RunName: "demo", TaskKey: "alpha", Title: "Work log",
+		MetaLine: "alpha produced this.", Content: "line one\nline two\n<script>alert(1)</script>\n"}
+	page := renderComponentString(t, FileWrapperPage(d))
+	assertGolden(t, "file_wrapper.golden.html", page)
+	for _, must := range []string{"<pre>", "line one", "class=\"page\""} {
+		if !strings.Contains(page, must) {
+			t.Errorf("wrapper missing %q", must)
+		}
+	}
+	// Content is arbitrary file bytes, never trusted HTML: templ's
+	// auto-escaping must turn a literal "<script>" in the file into inert
+	// text, not a live tag.
+	if strings.Contains(page, "<script>alert(1)</script>") {
+		t.Error("wrapper must escape file content, not render it as HTML")
+	}
+	if !strings.Contains(page, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Error("wrapper missing escaped file content")
+	}
+}
+
 func TestIndexPageGolden(t *testing.T) {
 	runs := []state.RunState{
 		{RunID: "run-123", RunName: "demo", Identity: "id", Done: true, StartedAt: "2026-07-10T10:00:00Z", UpdatedAt: "2026-07-10T10:01:04Z",

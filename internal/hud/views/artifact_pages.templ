@@ -62,6 +62,37 @@ templ FinalReportPage(rs state.RunState, stateDir string) {
 	</html>
 }
 
+// FileWrapperPage is the standalone text file-wrapper page (port of
+// render_file_wrapper_html, ringer.py:2868-2926): wraps a text deliverable
+// or the worker log in <pre>, showing only the last
+// ArtifactWrapperTailBytes (with MetaLine carrying a truncation banner when
+// the file is larger). Content is auto-escaped by templ — arbitrary file
+// bytes (which may contain "<script>", "</pre>", etc.) are never treated as
+// HTML. MetaLine is rendered as trusted HTML via @templ.Raw so the
+// truncation banner's <b> tags work; its only caller (Task 12) builds it
+// from TruncationBanner's integer-only formatting or otherwise-escaped
+// text.
+templ FileWrapperPage(d WrapperData) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer · "+d.RunName+" · "+d.TaskKey, 0)
+		<body>
+			<div class="page">
+				<header class="corner">
+					<span class="live-dot waiting" aria-hidden="true"></span>
+					<span class="eyebrow">Ringer · <b>{ d.RunName }</b> · { d.TaskKey }</span>
+					<span class="clock mono">artifact</span>
+				</header>
+				<section class="timeline">
+					<h1 class="briefing">{ d.Title }</h1>
+					<p class="meta">@templ.Raw(d.MetaLine)</p>
+					<pre>{ d.Content }</pre>
+				</section>
+			</div>
+		</body>
+	</html>
+}
+
 // IndexPage is the self-refreshing (5s) all-runs index: one pane of glass
 // across every run-state file under a state_dir (port of
 // render_artifact_index_html, ringer.py:3592-3660). Unlike StatusPage/
