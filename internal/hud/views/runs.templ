@@ -1,0 +1,53 @@
+package views
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/corruptmemory/ringer/internal/state"
+)
+
+// RunsPanel renders the live runs list (newest first). Reference
+// dashboard/ringside.html:851-963 for the exact class structure the lifted
+// CSS styles; the data derivations are the Task-5 helpers.
+templ RunsPanel(runs []state.RunState) {
+	<div id="runs" class="agents">
+		if len(runs) == 0 {
+			<div class="artifact-error">No runs yet.</div>
+		}
+		for _, rs := range runs {
+			@runCard(rs)
+		}
+	</div>
+}
+
+// runCard is shared with the Plan-4b artifact pages.
+templ runCard(rs state.RunState) {
+	<section class={ "run", RunState(rs) }>
+		<header class="corner">
+			<span class={ "live-dot", templ.KV("live", RunState(rs) == "live") } aria-hidden="true"></span>
+			<span class="eyebrow">{ rs.RunName } · { rs.Identity }</span>
+			<span class="mono">{ OutcomeText(rs) } · { FormatDuration(RunElapsed(rs)) }</span>
+		</header>
+		<div class="work-list">
+			for _, t := range rs.Tasks {
+				@taskRow(rs.RunID, t)
+			}
+		</div>
+	</section>
+}
+
+// taskRow is shared with the Plan-4b artifact pages.
+templ taskRow(runID string, t state.TaskView) {
+	<div class={ "work-item", TaskKind(t) }>
+		<span class="name">{ t.Key }</span>
+		if t.Engine != "" {
+			<span class="mono muted">{ t.Engine }</span>
+		}
+		<span class={ "state", TaskKind(t) }>{ TaskStateText(TaskKind(t)) }</span>
+		<span class="mono">{ FormatDuration(TaskElapsed(t)) }</span>
+		if t.LogPath != "" {
+			<a href={ templ.SafeURL(fmt.Sprintf("/logs/%s/%s", url.PathEscape(runID), url.PathEscape(t.Key))) }>view log</a>
+		}
+	</div>
+}
