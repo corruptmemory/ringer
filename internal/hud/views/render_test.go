@@ -43,16 +43,16 @@ func TestTaskKind(t *testing.T) {
 
 func TestTaskElapsedAndFormat(t *testing.T) {
 	tv := state.TaskView{StartedAt: "2026-07-09T00:00:00Z", EndedAt: "2026-07-09T00:01:03Z"}
-	if TaskElapsed(tv) != 63 {
-		t.Fatalf("task elapsed = %v, want 63", TaskElapsed(tv))
+	if TaskElapsed(tv, "2026-07-09T00:01:03Z") != 63 {
+		t.Fatalf("task elapsed = %v, want 63", TaskElapsed(tv, "2026-07-09T00:01:03Z"))
 	}
-	// A still-running task (no end) reads as 0, not a wrong number.
-	if TaskElapsed(state.TaskView{StartedAt: "2026-07-09T00:00:00Z"}) != 0 {
-		t.Fatal("unfinished task elapsed must be 0")
+	// A still-running task (no end) measures against nowISO, not 0.
+	if TaskElapsed(state.TaskView{StartedAt: "2026-07-09T00:00:00Z"}, "2026-07-09T00:00:00Z") != 0 {
+		t.Fatal("unfinished task elapsed at nowISO==StartedAt must be 0")
 	}
 	// A never-started-but-failed task (EndedAt set, StartedAt "") reads 0 too,
 	// not a huge/negative number (runner early-exit failures stamp EndedAt only).
-	if TaskElapsed(state.TaskView{EndedAt: "2026-07-09T00:00:00Z"}) != 0 {
+	if TaskElapsed(state.TaskView{EndedAt: "2026-07-09T00:00:00Z"}, "2026-07-09T00:00:05Z") != 0 {
 		t.Fatal("never-started (empty StartedAt) task elapsed must be 0")
 	}
 	if got := FormatDuration(63); got != "1m 03s" {
@@ -60,5 +60,22 @@ func TestTaskElapsedAndFormat(t *testing.T) {
 	}
 	if got := FormatDuration(9); got != "9s" {
 		t.Fatalf("FormatDuration(9) = %q, want \"9s\"", got)
+	}
+}
+
+func TestTaskElapsedRunningTaskTicks(t *testing.T) {
+	// A running task (no ended_at) must measure started_at -> nowISO, not 0.
+	running := state.TaskView{Status: "running", StartedAt: "2026-07-10T10:00:00Z", EndedAt: ""}
+	if got := TaskElapsed(running, "2026-07-10T10:00:13Z"); got != 13 {
+		t.Errorf("running TaskElapsed = %v, want 13", got)
+	}
+	// A finished task ignores nowISO and uses ended_at.
+	done := state.TaskView{Status: "passed", StartedAt: "2026-07-10T10:00:00Z", EndedAt: "2026-07-10T10:00:05Z"}
+	if got := TaskElapsed(done, "2026-07-10T10:00:13Z"); got != 5 {
+		t.Errorf("finished TaskElapsed = %v, want 5", got)
+	}
+	// Unparseable/empty start still yields 0.
+	if got := TaskElapsed(state.TaskView{}, "2026-07-10T10:00:13Z"); got != 0 {
+		t.Errorf("empty TaskElapsed = %v, want 0", got)
 	}
 }

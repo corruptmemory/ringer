@@ -184,7 +184,7 @@ func runCard(rs state.RunState) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		for _, t := range rs.Tasks {
-			templ_7745c5c3_Err = taskRow(rs.RunID, t).Render(ctx, templ_7745c5c3_Buffer)
+			templ_7745c5c3_Err = taskRow(rs.RunID, rs.UpdatedAt, t).Render(ctx, templ_7745c5c3_Buffer)
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -201,7 +201,7 @@ func runCard(rs state.RunState) templ.Component {
 // dashboard/ringside.html:925-957 (.worker row with a .glyph.<kind> dot,
 // .name, .state.<kind> label, .time; engine/log-link ride the .activity
 // second line the CSS already reserves under the 4-column worker grid).
-func taskRow(runID string, t state.TaskView) templ.Component {
+func taskRow(runID, nowISO string, t state.TaskView) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
 		if templ_7745c5c3_CtxErr := ctx.Err(); templ_7745c5c3_CtxErr != nil {
@@ -297,9 +297,9 @@ func taskRow(runID string, t state.TaskView) templ.Component {
 			return templ_7745c5c3_Err
 		}
 		var templ_7745c5c3_Var18 string
-		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(FormatDuration(TaskElapsed(t)))
+		templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(FormatDuration(TaskElapsed(t, nowISO)))
 		if templ_7745c5c3_Err != nil {
-			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/runs.templ`, Line: 52, Col: 58}
+			return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/runs.templ`, Line: 52, Col: 66}
 		}
 		_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 		if templ_7745c5c3_Err != nil {

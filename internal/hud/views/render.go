@@ -43,9 +43,17 @@ func FailCount(rs state.RunState) int {
 // RunElapsed is updated-started in seconds (0 if either is unparseable).
 func RunElapsed(rs state.RunState) float64 { return elapsed(rs.StartedAt, rs.UpdatedAt) }
 
-// TaskElapsed is a task's ended-started in seconds; a still-running task
-// (no ended_at) reads as 0.
-func TaskElapsed(t state.TaskView) float64 { return elapsed(t.StartedAt, t.EndedAt) }
+// TaskElapsed is a task's elapsed seconds: ended-started once finished, else
+// nowISO-started while still running (so a working task's timer ticks with
+// each 1 Hz snapshot instead of reading 0). nowISO is the snapshot's
+// UpdatedAt. 0 if start is unparseable or the interval is non-positive.
+func TaskElapsed(t state.TaskView, nowISO string) float64 {
+	end := t.EndedAt
+	if end == "" {
+		end = nowISO
+	}
+	return elapsed(t.StartedAt, end)
+}
 
 // TaskKind maps a Go task status to the ringside bucket the lifted CSS
 // styles: passed→pass, running→working (retry on a 2nd attempt),
