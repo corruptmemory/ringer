@@ -199,3 +199,49 @@ func TestPruneDropsNonPositivePIDs(t *testing.T) {
 		t.Fatal("pid=0 entry survived pruning; kill(0,0) probes our own process group, not a process")
 	}
 }
+
+func TestTaskViewDeliverablesRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	in := RunState{
+		RunID: "r1", RunName: "run", UpdatedAt: "2026-07-10T10:00:00Z",
+		Tasks: []TaskView{{
+			Key: "alpha", Status: "passed",
+			Deliverables:     []Deliverable{{TaskKey: "alpha", Name: "out.md", Path: "/a/out.md", Bytes: 12}},
+			CheckTail:        "ok\n",
+			DeliverableNotes: []string{"big.bin skipped"},
+		}},
+	}
+	if err := WriteRunState(dir, in); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadAllRunStates(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[0].Tasks) != 1 {
+		t.Fatalf("got %d runs", len(got))
+	}
+	d := got[0].Tasks[0].Deliverables
+	if len(d) != 1 || d[0].Name != "out.md" || d[0].Bytes != 12 {
+		t.Errorf("deliverables round-trip wrong: %+v", d)
+	}
+	if got[0].Tasks[0].CheckTail != "ok\n" {
+		t.Errorf("check_tail lost: %q", got[0].Tasks[0].CheckTail)
+	}
+}
+
+func TestReadAllRunStatesSkipsMalformedNewestFirst(t *testing.T) {
+	dir := t.TempDir()
+	_ = WriteRunState(dir, RunState{RunID: "old", UpdatedAt: "2026-07-10T09:00:00Z"})
+	_ = WriteRunState(dir, RunState{RunID: "new", UpdatedAt: "2026-07-10T11:00:00Z"})
+	if err := os.WriteFile(filepath.Join(dir, "runs", "junk.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := ReadAllRunStates(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].RunID != "new" {
+		t.Fatalf("want [new, old] skipping junk, got %+v", got)
+	}
+}

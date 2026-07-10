@@ -1,0 +1,44 @@
+package views
+
+import "github.com/corruptmemory/ringer/internal/state"
+
+// artifactCorner is the artifact page's corner header (port of
+// render_corner_header, ringer.py:3429-3439): a live-dot (pulsing "is-live"
+// while live, else the run's pass/fail bucket), the "Ringer · run · identity"
+// eyebrow, and a mono elapsed/total clock.
+templ artifactCorner(rs state.RunState, live bool) {
+	<header class="corner">
+		if live {
+			<span class="live-dot is-live" aria-hidden="true"></span>
+		} else {
+			<span class={ "live-dot", RunState(rs) } aria-hidden="true"></span>
+		}
+		<span class="eyebrow">Ringer · <b>{ rs.RunName }</b> · { rs.Identity }</span>
+		if live {
+			<span class="clock mono">{ FormatDuration(RunElapsed(rs)) } elapsed</span>
+		} else {
+			<span class="clock mono">{ FormatDuration(RunElapsed(rs)) } total</span>
+		}
+	</header>
+}
+
+// progressBar is the per-task chip strip plus its summary legend (port of
+// render_progress_bar, ringer.py:3158-3186).
+templ progressBar(rs state.RunState) {
+	<div class="rounds">
+		for _, t := range rs.Tasks {
+			<span class={ TaskKind(t) }></span>
+		}
+	</div>
+	<p class="legend">{ progressLegend(rs) }</p>
+}
+
+// briefingHeading is the plain-language run heading, live or final (port of
+// live_briefing_html/final_briefing_html, ringer.py:3013-3053).
+templ briefingHeading(rs state.RunState, live bool) {
+	if live {
+		<h1 id="right-now-heading" class="briefing">{ BriefingLive(rs) }</h1>
+	} else {
+		<h1 id="what-happened-heading" class="briefing">{ BriefingFinal(rs) }</h1>
+	}
+}

@@ -141,6 +141,27 @@ jail_ro_binds = ["~/.opencode"]
 	}
 }
 
+func TestArtifactEnabledDefaultsTrue(t *testing.T) {
+	c, err := Load(filepath.Join(t.TempDir(), "nope.toml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !c.ArtifactEnabled() {
+		t.Errorf("ArtifactEnabled() = false, want true for an absent [artifact] section")
+	}
+}
+
+func TestArtifactEnabledExplicitFalse(t *testing.T) {
+	p := writeConfig(t, "[artifact]\nenabled = false\n")
+	c, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if c.ArtifactEnabled() {
+		t.Errorf("ArtifactEnabled() = true, want false for explicit enabled = false")
+	}
+}
+
 func TestExpandUser(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

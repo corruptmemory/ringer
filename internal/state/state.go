@@ -5,20 +5,36 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 )
 
+// Deliverable is one harvested task output file, recorded on the run-state
+// snapshot and copied into the artifact library version. JSON keys are frozen
+// (Python parity): task_key/name/path/bytes. path is the absolute copied-file
+// path under <state_dir>/artifacts/deliverables/.
+type Deliverable struct {
+	TaskKey string `json:"task_key"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Bytes   int64  `json:"bytes"`
+}
+
 type TaskView struct {
-	Key       string `json:"key"`
-	Engine    string `json:"engine"`
-	Model     string `json:"model"`
-	Status    string `json:"status"` // pending|running|passed|failed|timeout
-	Attempt   int    `json:"attempt"`
-	Tokens    int64  `json:"tokens"`
-	Verified  string `json:"verified"`
-	LogPath   string `json:"log_path"`
-	StartedAt string `json:"started_at"` // RFC3339, first-attempt start ("" until running)
-	EndedAt   string `json:"ended_at"`   // RFC3339, final outcome time ("" until finished)
+	Key              string        `json:"key"`
+	Engine           string        `json:"engine"`
+	Model            string        `json:"model"`
+	Status           string        `json:"status"` // pending|running|passed|failed|timeout
+	Attempt          int           `json:"attempt"`
+	Tokens           int64         `json:"tokens"`
+	Verified         string        `json:"verified"`
+	LogPath          string        `json:"log_path"`
+	StartedAt        string        `json:"started_at"` // RFC3339, first-attempt start ("" until running)
+	EndedAt          string        `json:"ended_at"`   // RFC3339, final outcome time ("" until finished)
+	Deliverables     []Deliverable `json:"deliverables,omitempty"`
+	CheckTail        string        `json:"check_tail,omitempty"`
+	DeliverableNotes []string      `json:"deliverable_notes,omitempty"`
 }
 
 type RunState struct {
@@ -139,4 +155,34 @@ func ReadActiveRuns(stateDir string) (map[string]ActiveRun, error) {
 		}
 	}
 	return pruned, nil
+}
+
+// ReadAllRunStates reads every <stateDir>/runs/*.json run-state file, skipping
+// any that are missing/malformed, sorted newest-UpdatedAt-first. Used by the
+// artifact index page and any all-runs scan.
+func ReadAllRunStates(stateDir string) ([]RunState, error) {
+	entries, err := os.ReadDir(filepath.Join(stateDir, "runs"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var out []RunState
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(stateDir, "runs", e.Name()))
+		if err != nil {
+			continue
+		}
+		var rs RunState
+		if err := json.Unmarshal(data, &rs); err != nil {
+			continue
+		}
+		out = append(out, rs)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].UpdatedAt > out[j].UpdatedAt })
+	return out, nil
 }

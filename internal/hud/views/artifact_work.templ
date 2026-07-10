@@ -1,0 +1,96 @@
+package views
+
+import "github.com/corruptmemory/ringer/internal/state"
+
+// workSection is the per-run "The work" list: one workGroup per task (port
+// of render_work_section, ringer.py:3189-3221). primary switches on the
+// final-report styling (.work.is-primary) the self-refreshing status page
+// doesn't use.
+templ workSection(rs state.RunState, stateDir, base string, primary bool) {
+	<section class={ "work", templ.KV("is-primary", primary) } aria-labelledby="the-work-heading">
+		<h2 id="the-work-heading">The work</h2>
+		if len(rs.Tasks) == 0 {
+			<p class="empty-note">No tasks.</p>
+		} else {
+			<div class="work-list">
+				for _, t := range rs.Tasks {
+					@workGroup(rs, t, stateDir, base)
+				}
+			</div>
+		}
+	</section>
+}
+
+// workGroup is one task's row: the worker summary line plus a body carrying
+// its deliverables, verification proof, and links (port of
+// render_work_group, ringer.py:3224-3309). This is where the artifact pages
+// diverge from the dashboard's plain taskRow (runs.templ) — each task gets
+// a .work-group-body underneath its worker row.
+templ workGroup(rs state.RunState, t state.TaskView, stateDir, base string) {
+	<div class="work-group">
+		<div class="worker">
+			<span class={ "glyph", TaskKind(t) } aria-hidden="true"></span>
+			<span class="name" title={ t.Key }>{ t.Key }</span>
+			<span class={ "state", TaskKind(t) }>{ TaskStateText(TaskKind(t)) }</span>
+			<span class="time mono">{ FormatDuration(TaskElapsed(t, rs.UpdatedAt)) }</span>
+		</div>
+		<div class="work-group-body">
+			if len(t.Deliverables) == 0 {
+				<p class="empty-note">{ emptyWorkNote(TaskKind(t)) }</p>
+			} else {
+				<div class="work-list">
+					for _, d := range t.Deliverables {
+						@workItem(rs.RunID, d, stateDir, base)
+					}
+				</div>
+			}
+			for _, n := range t.DeliverableNotes {
+				<p class="omitted-note">{ n }</p>
+			}
+			if showVerified(t) {
+				<span class="verified">{ verifiedLabel(t) }</span>
+			}
+			if showProof(t) {
+				<details class="proof">
+					<summary>{ proofLabel(t) }</summary>
+					<pre>{ proofText(t) }</pre>
+				</details>
+			}
+			<span class="links">
+				@taskLinks(rs.RunID, t, stateDir, base)
+			</span>
+		</div>
+	</div>
+}
+
+// workItem is one deliverable row: an optional inline image thumbnail plus
+// the link + kind label (port of render_work_item, ringer.py:3312-3346).
+templ workItem(runID string, d state.Deliverable, stateDir, base string) {
+	<div class="work-item">
+		if IsImageDeliverable(d.Name) && ImageDataURI(d.Path) != "" {
+			<a class="work-thumb-link" href={ templ.SafeURL(base + DeliverableHref(d, runID, stateDir)) }>
+				<img class="work-thumb" src={ templ.SafeURL(ImageDataURI(d.Path)) } alt={ d.Name }/>
+			</a>
+		}
+		<div class="work-main">
+			<a class="work-link" href={ templ.SafeURL(base + DeliverableHref(d, runID, stateDir)) }>{ deliverableLabel(d.Name) }</a>
+			<div class="work-kind">{ DeliverableKind(d.Name) }</div>
+		</div>
+	</div>
+}
+
+// taskLinks is a task's "Read what it found" / "view the work log" link row
+// (port of render_task_links, ringer.py:3532-3591), joined with " · ", or a
+// muted em dash when the task has neither.
+templ taskLinks(runID string, t state.TaskView, stateDir, base string) {
+	if len(taskLinkItems(runID, t, stateDir)) == 0 {
+		<span class="muted">—</span>
+	} else {
+		for i, l := range taskLinkItems(runID, t, stateDir) {
+			if i > 0 {
+				{ " · " }
+			}
+			<a href={ templ.SafeURL(base + l.href) }>{ l.text }</a>
+		}
+	}
+}

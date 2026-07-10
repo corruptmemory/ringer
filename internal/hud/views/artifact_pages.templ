@@ -1,0 +1,159 @@
+package views
+
+import (
+	"fmt"
+
+	"github.com/corruptmemory/ringer/internal/state"
+)
+
+// pageHead is the shared <head> for both artifact pages: charset, the CSP
+// meta (Task 6), an optional self-refresh meta the status page uses and the
+// final report doesn't, the page title, and the embedded artifact CSS
+// (Task 6).
+templ pageHead(title string, refreshSeconds int) {
+	<head>
+		<meta charset="utf-8"/>
+		@templ.Raw(CSPMeta)
+		if refreshSeconds > 0 {
+			<meta http-equiv="refresh" content={ intToString(refreshSeconds) }/>
+		}
+		<title>{ title }</title>
+		@templ.Raw("<style>" + ArtifactCSS + "</style>")
+	</head>
+}
+
+// breadcrumb is the small "← dashboard · all runs" nav row at the top of every
+// served artifact page. The dashboard link is root-absolute ("/", the HUD
+// home) — correct when the page is served over HTTP by the HUD, a harmless
+// dead link when the page is opened straight from disk. The all-runs link
+// stays inside the artifacts tree (base + "index.html"), so it resolves under
+// both HTTP and file://. allRuns is false on the index page itself.
+templ breadcrumb(base string, allRuns bool) {
+	<nav class="crumbs">
+		<a href="/">← dashboard</a>
+		if allRuns {
+			{ " · " }
+			<a href={ templ.SafeURL(base + "index.html") }>all runs</a>
+		}
+	</nav>
+}
+
+// StatusPage is the self-refreshing (2s) live artifact page (port of
+// render_status_html, ringer.py:3451-3488): corner header, live briefing,
+// progress bar, work section, and a footer noting the page keeps updating
+// itself. base is the relative prefix from THIS page's on-disk location back
+// to the artifacts root ("" for a root page, "../" for live/<run_name>.html,
+// "../../" for versions/<run_name>/<run_id>.html); every deliverable/wrapper
+// href is artifacts-root-relative, so the page must prepend base to reach
+// them from its own directory (matches Python's page_path resolution — both
+// http /artifacts/... and file:// opening rely on it).
+templ StatusPage(rs state.RunState, stateDir, base string) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer · "+rs.RunName, 2)
+		<body>
+			@breadcrumb(base, true)
+			<div class="page">
+				@artifactCorner(rs, true)
+				@briefingHeading(rs, true)
+				@progressBar(rs)
+				@workSection(rs, stateDir, base, false)
+				<footer>Updated by ringer · this page refreshes while the work runs.</footer>
+			</div>
+		</body>
+	</html>
+}
+
+// FinalReportPage is the frozen, self-contained final report (port of
+// render_final_report_html, ringer.py:3489-3531): no refresh, the final
+// (non-live) corner + briefing, and a primary (.work.is-primary) work
+// section.
+templ FinalReportPage(rs state.RunState, stateDir, base string) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer report · "+rs.RunName, 0)
+		<body>
+			@breadcrumb(base, true)
+			<div class="page">
+				@artifactCorner(rs, false)
+				@briefingHeading(rs, false)
+				@progressBar(rs)
+				@workSection(rs, stateDir, base, true)
+				<footer>Finished by ringer.</footer>
+			</div>
+		</body>
+	</html>
+}
+
+// FileWrapperPage is the standalone text file-wrapper page (port of
+// render_file_wrapper_html, ringer.py:2868-2926): wraps a text deliverable
+// or the worker log in <pre>, showing only the last
+// ArtifactWrapperTailBytes (with MetaLine carrying a truncation banner when
+// the file is larger). Content is auto-escaped by templ — arbitrary file
+// bytes (which may contain "<script>", "</pre>", etc.) are never treated as
+// HTML. MetaLine is rendered as trusted HTML via @templ.Raw so the
+// truncation banner's <b> tags work; its only caller (Task 12) builds it
+// from TruncationBanner's integer-only formatting or otherwise-escaped
+// text.
+templ FileWrapperPage(d WrapperData) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer · "+d.RunName+" · "+d.TaskKey, 0)
+		<body>
+			@breadcrumb(d.Base, true)
+			<div class="page">
+				<header class="corner">
+					<span class="live-dot waiting" aria-hidden="true"></span>
+					<span class="eyebrow">Ringer · <b>{ d.RunName }</b> · { d.TaskKey }</span>
+					<span class="clock mono">artifact</span>
+				</header>
+				<section class="timeline">
+					<h1 class="briefing">{ d.Title }</h1>
+					<p class="meta">@templ.Raw(d.MetaLine)</p>
+					<pre>{ d.Content }</pre>
+				</section>
+			</div>
+		</body>
+	</html>
+}
+
+// IndexPage is the self-refreshing (5s) all-runs index: one pane of glass
+// across every run-state file under a state_dir (port of
+// render_artifact_index_html, ringer.py:3592-3660). Unlike StatusPage/
+// FinalReportPage it wraps in `.wrap`, not `.page` — parity with Python,
+// which only styles `.page`, leaving this page's wrapper intentionally
+// unstyled by artifact.css.
+templ IndexPage(rows []IndexRow) {
+	<!doctype html>
+	<html lang="en">
+		@pageHead("ringer · all runs", 5)
+		<body>
+			@breadcrumb("", false)
+			<div class="wrap">
+				<h1>ringer — all runs</h1>
+				<p class="meta">{ fmt.Sprintf("%d runs", len(rows)) }</p>
+				<table>
+					<thead><tr><th>State</th><th>Run</th><th>Identity</th><th>Result</th><th>Elapsed</th><th>Artifacts</th></tr></thead>
+					<tbody>
+						for _, r := range rows {
+							<tr>
+								<td><span class="chip" style={ "background:" + StatusColor(r.State) }>{ r.State }</span></td>
+								<td>{ r.RunName }</td>
+								<td>{ r.Identity }</td>
+								<td>{ fmt.Sprintf("%d pass / %d fail", r.Pass, r.Fail) }</td>
+								<td class="mono">{ r.Elapsed }</td>
+								<td class="run-links">
+									<a href={ templ.SafeURL(r.LiveHref) }>live</a>
+									if r.ReportHref != "" {
+										{ " · " }
+										<a href={ templ.SafeURL(r.ReportHref) }>report</a>
+									}
+								</td>
+							</tr>
+						}
+					</tbody>
+				</table>
+			</div>
+		</body>
+	</html>
+}

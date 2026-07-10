@@ -12,6 +12,7 @@ import (
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
 	"github.com/corruptmemory/ringer/internal/hud"
+	"github.com/corruptmemory/ringer/internal/hud/artifactwriter"
 	"github.com/corruptmemory/ringer/internal/isolate"
 	"github.com/corruptmemory/ringer/internal/lint"
 	"github.com/corruptmemory/ringer/internal/logging"
@@ -147,9 +148,14 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 		defer st.Close()
 	}
 
+	var artWriter runner.ArtifactWriter
+	if cfg.ArtifactEnabled() {
+		artWriter = artifactwriter.New(cfg.StateDirPath(), resolveArtifactConfig(cfg), lg)
+	}
+
 	res, err := runner.Run(ctx, runner.Options{
 		Manifest: m, Engines: engines, StateDir: cfg.StateDirPath(),
-		Identity: identity, Store: st, Stdout: os.Stdout, Logger: lg,
+		Identity: identity, Store: st, Artifact: artWriter, Stdout: os.Stdout, Logger: lg,
 		MaxParallel: m.MaxParallel, Isolator: iso,
 	})
 	if st != nil {
@@ -172,6 +178,26 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 		return fmt.Errorf("run %s: one or more tasks failed", res.RunID)
 	}
 	return nil
+}
+
+// resolveArtifactConfig builds the artifactwriter.Config for cfg's artifact
+// section: artifactwriter.DefaultConfig lays out the standard tree rooted at
+// StateDirPath, and any of [artifact] out/report_out/index_out the user set
+// overrides the corresponding path (empty -> keep the default), expanding a
+// leading "~" the same way every other configured path in this codebase
+// does.
+func resolveArtifactConfig(cfg *config.AppConfig) artifactwriter.Config {
+	ac := artifactwriter.DefaultConfig(cfg.StateDirPath())
+	if cfg.Artifact.Out != "" {
+		ac.OutTemplate = config.ExpandUser(cfg.Artifact.Out)
+	}
+	if cfg.Artifact.ReportOut != "" {
+		ac.ReportTemplate = config.ExpandUser(cfg.Artifact.ReportOut)
+	}
+	if cfg.Artifact.IndexOut != "" {
+		ac.IndexPath = config.ExpandUser(cfg.Artifact.IndexOut)
+	}
+	return ac
 }
 
 // selectIsolator returns the isolation backend for a run, or nil when no
