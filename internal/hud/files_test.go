@@ -34,6 +34,31 @@ func TestArtifactsServeAndGuard(t *testing.T) {
 	}
 }
 
+func TestArtifactsSymlinkEscapeDenied(t *testing.T) {
+	dir := t.TempDir()
+	art := artifact.ArtifactsDir(dir)
+	if err := os.MkdirAll(art, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A secret OUTSIDE the artifact tree, and a symlink INSIDE pointing at it.
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("TOP-SECRET"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(art, "evil.txt")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	srv := New(dir, nil).Handler()
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/artifacts/evil.txt", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("symlink escape served (code %d) — must be 404; body=%q", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "TOP-SECRET") {
+		t.Fatal("served content from outside the artifact tree via symlink")
+	}
+}
+
 func TestLogsTail(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "a.worker.log")

@@ -45,14 +45,26 @@ func (s *Server) resolveArtifactPath(rel string) (string, bool) {
 	if err != nil {
 		return "", false
 	}
-	candidate, err := filepath.Abs(filepath.Join(root, filepath.Clean("/"+rel)))
+	// Resolve the root through symlinks so the containment check compares
+	// real paths (e.g. macOS /tmp -> /private/tmp). A missing artifacts
+	// root can't contain anything.
+	rootReal, err := filepath.EvalSymlinks(root)
 	if err != nil {
 		return "", false
 	}
-	if candidate == root || !strings.HasPrefix(candidate, root+string(filepath.Separator)) {
+	candidate := filepath.Join(rootReal, filepath.Clean("/"+rel))
+	// Resolve the candidate through symlinks and re-check containment: a
+	// symlink planted under the tree must not escape it (a worker's
+	// harvested output could contain one). EvalSymlinks also fails for a
+	// non-existent path, which correctly yields a 404.
+	real, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
 		return "", false
 	}
-	return candidate, true
+	if real == rootReal || strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
+		return real, true
+	}
+	return "", false
 }
 
 func artifactContentType(path string) string {
@@ -169,6 +181,21 @@ func (s *Server) handleOpenFolder(w http.ResponseWriter, r *http.Request) {
 	}
 	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
 		abs = root
+	} else {
+		// Resolve symlinks and re-check containment: a worker's harvested
+		// deliverables output could include a symlink that escapes the
+		// artifact tree (same root cause as the /artifacts guard). Fall
+		// back to the (unresolved) artifact root — the same fallback used
+		// above for a missing deliverables dir — rather than shell out to
+		// an escaped path.
+		rootReal, rootErr := filepath.EvalSymlinks(root)
+		real, realErr := filepath.EvalSymlinks(abs)
+		if rootErr != nil || realErr != nil ||
+			!(real == rootReal || strings.HasPrefix(real, rootReal+string(filepath.Separator))) {
+			abs = root
+		} else {
+			abs = real
+		}
 	}
 	if err := openInFileManager(abs); err != nil {
 		s.lg.Warnf("hud: open-folder %s: %v", abs, err)
