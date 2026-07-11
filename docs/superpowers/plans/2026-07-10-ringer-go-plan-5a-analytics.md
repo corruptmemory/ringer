@@ -1,5 +1,17 @@
 # Ringer Go Plan 5a — Analytics Implementation Plan
 
+> **STATUS — EXECUTED + reviewed 2026-07-10 (branch `go-analytics`, `aa2476e..`).** All 11 tasks ran via subagent-driven-development; opus whole-branch review = **READY TO MERGE** with 1 Important fixed. **Where the shipped code diverges from the task text below, the shipped code is authoritative** — the per-task review loop corrected several plan-authored issues:
+> - **Task 1:** `identity`/`identity_defaults` tables **dropped** from the schema (identity resolves in Go — procedural fallback, nothing queries it relationally). Only `catalog_models`/`catalog_events` added.
+> - **Task 2 + 6:** `LoadRegistry`/`LoadNotes` on a non-empty override path whose read **fails** now return **empty** (not the embedded default) — Python parity, no silent masquerade of a broken override.
+> - **Task 6:** `JudgmentNotes` returns a **defensive copy** of the bullets (was aliasing the parsed sections → an in-place-sort data race).
+> - **Task 7:** `--html` reshaped to `--html` (bool → default path) **+ `--html-out PATH`** (+ a stray-positional guard) — the plan's `optional-value` tag silently dropped the space-form path (go-flags trap). Deliberate expressive-equivalence deviation.
+> - **Task 8:** `catalog`/`models` gained a stray-positional guard + source-tailored empty-catalog error.
+> - **Task 9:** `taskTypeFromMapping` tier-3 corrected to the frozen precedence (longest `name:<prefix>` by **length alone**, then void if the winner's value is empty — the plan's code wrongly folded the truthiness check into the search); `store.Attempt` gained snake_case `json` tags for the export→import round-trip.
+> - **Task 10:** added `table`/`th`/`td`/`.chip` rules to `ringside.css` (the reused classes lived only in `artifact.css`, which the dashboard doesn't load).
+> - **Final-review fix (`512e732`):** `median()` registered via **`sync.Once`** (the plan's bool guard was not concurrency-safe × the HUD's per-request `store.Open` → a fatal "concurrent map writes"); `config.sample.toml` gained the `[scoreboard]`/`[catalog]` keys.
+>
+> **Deferred to a 5b cleanup batch (not defects — improvements/polish):** de-fixate port 8700 (the `run`/`demo` auto-HUD hardcodes `hud.DefaultPort`; `ensureHUDRunning` is already port-parameterized; generated pages already use relative links); make **opencode cost resolve** by stripping the `openrouter/` prefix before the `catalog_models.id = model` join (currently faithful-to-Python-blank); a reflection-based `gen-config`; a warn-log on override read-failure. Accept-to-ship Minors are enumerated in the `.superpowers/sdd/progress.md` ledger.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Port Ringer's model-performance analytics (the `models` scoreboard, the OpenRouter `catalog`, and `db` maintenance) from `ringer.py` to Go, filling the HUD's `/hud/models` panel from SQLite — the last Python-only feature before the Plan-5c cutover can delete `ringer.py`.
