@@ -94,7 +94,11 @@ func ParseTokens(tokenRegex, output string) int64 {
 	}
 	last := matches[len(matches)-1]
 	grp := last[len(last)-1]
-	n, err := strconv.ParseInt(strings.TrimSpace(grp), 10, 64)
+	// Strip grouping commas ("75,417") before parsing — the token_regex
+	// capture classes intentionally allow [0-9,] (e.g. codex prints
+	// "tokens used\n75,417"), but ParseInt rejects the comma. Without this
+	// the count silently degrades to the -1 sentinel ("???" in the HUD).
+	n, err := strconv.ParseInt(strings.ReplaceAll(strings.TrimSpace(grp), ",", ""), 10, 64)
 	if err != nil {
 		return -1
 	}

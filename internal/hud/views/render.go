@@ -7,9 +7,14 @@ import (
 	"github.com/corruptmemory/ringer/internal/state"
 )
 
-// RunState derives the ringside run bucket from the Go run-state: "live"
-// while running, else "fail" if any task failed/timed out, else "pass".
+// RunState derives the ringside run bucket from the Go run-state: "died" if
+// the HUD flagged it an orphan (not Done but its orchestrator is gone),
+// else "live" while running, else "fail" if any task failed/timed out, else
+// "pass".
 func RunState(rs state.RunState) string {
+	if rs.Died {
+		return "died"
+	}
 	if !rs.Done {
 		return "live"
 	}

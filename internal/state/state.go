@@ -46,6 +46,12 @@ type RunState struct {
 	UpdatedAt string     `json:"updated_at"`
 	Done      bool       `json:"done"`
 	Tasks     []TaskView `json:"tasks"`
+
+	// Died is a transient, HUD-only flag (never persisted): a run that is
+	// not Done but whose orchestrator PID is gone (crashed / killed) — an
+	// orphan. The HUD sets it so such runs render as "died", not
+	// perpetually "working". json:"-" keeps it out of the on-disk schema.
+	Died bool `json:"-"`
 }
 
 type ActiveRun struct {

@@ -104,6 +104,7 @@ func TestParseTokens(t *testing.T) {
 		{"whole-match fallback when the regex has no capture group", `[0-9]+`, "count 42", 42},
 		{"leading whitespace inside the capture group is trimmed", `total=(\s*[0-9]+)`, "total=   42", 42},
 		{"non-numeric match yields the sentinel", `total=(\w+)`, "total=abc", -1},
+		{"grouping commas are stripped (codex 'tokens used\\n75,417')", `tokens\s+used\s*:?\s*([0-9][0-9,]*)`, "diff produced no output.\n\ntokens used\n75,417\ndone", 75417},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

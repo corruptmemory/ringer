@@ -23,6 +23,18 @@ func TestRunDerivations(t *testing.T) {
 	if RunState(finPass) != "pass" {
 		t.Fatalf("all-pass finished → %q, want pass", RunState(finPass))
 	}
+	// An orphaned run (Died flag set by the HUD): "died", not perpetual "live".
+	died := state.RunState{Died: true, Done: false, Tasks: []state.TaskView{{Status: "running"}}}
+	if RunState(died) != "died" {
+		t.Fatalf("orphan run → %q, want died", RunState(died))
+	}
+	if got := OutcomeText(died); got != "died · 0 passed" {
+		t.Fatalf("died OutcomeText = %q, want %q", got, "died · 0 passed")
+	}
+	// Died wins over the not-Done "live" bucket.
+	if RunState(state.RunState{Died: true, Done: false, Tasks: []state.TaskView{{Status: "passed"}}}) != "died" {
+		t.Fatal("Died must win over live")
+	}
 }
 
 func TestTaskKind(t *testing.T) {
