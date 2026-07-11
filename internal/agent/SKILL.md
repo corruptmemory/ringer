@@ -2,9 +2,9 @@
 name: ringer
 description: >-
   Orchestrator playbook and routing rules for Ringer, the verified-swarm
-  delegation tool (ringer.py). TRIGGER — load BEFORE acting, not after —
-  whenever: you are about to run ANY script or command that calls a model or
-  drives a conversational/eval harness (probe, smoke test, simulation,
+  delegation tool (the `ringer` binary). TRIGGER — load BEFORE acting, not
+  after — whenever: you are about to run ANY script or command that calls a
+  model or drives a conversational/eval harness (probe, smoke test, simulation,
   grader, persona conversation) outside a live Ringer run; you are about to
   start an edit→test→edit loop or a batch of similar edits across files; you
   are about to do a "quick check" that spawns a model or a CLI agent; you are
@@ -36,11 +36,12 @@ description: >-
    the same problem is a loop, and loops are manifests.
 4. **Runs are watched, not hidden — and the screen comes up FIRST.** The
    moment this skill loads for real work, before you write a single spec,
-   put Ringside on the human's screen: `./ringer.py hud` (idempotent — if
+   put Ringside on the human's screen: `ringer hud` (idempotent — if
    one is already up it says so and opens the page; runs also auto-start
-   it). Ringside is the PAGE at http://127.0.0.1:8700 — NEVER launch the
-   Ringside.app application (`open -a Ringside`); it is a parked prototype
-   with a stale frontend. And never go dark: if your prep (research,
+   it). Ringside is the built-in Go HUD, served at http://127.0.0.1:8700 —
+   NEVER launch a `Ringside.app` macOS bundle (`open -a Ringside`); that was
+   the old Tauri prototype, now deleted from this repo — `ringer hud` is the
+   only Ringside. And never go dark: if your prep (research,
    check-writing, manifest drafting) will take more than ~30 seconds,
    tell the human in one sentence what you're doing and roughly how long
    before you start — they should be watching the empty arena and reading
@@ -56,10 +57,10 @@ the orchestrating model — pay tokens only for specs, orchestration, and
 review.
 
 ```bash
-./ringer.py lint manifest.json            # always lint before running
-./ringer.py run manifest.json --identity <who-you-are>
-./ringer.py demo                          # 3-worker smoke test
-./ringer.py run manifest.json --dry-run   # print the plan, spawn nothing
+ringer lint manifest.json            # always lint before running
+ringer run manifest.json --identity <who-you-are>
+ringer demo                          # 3-worker smoke test
+ringer run manifest.json --dry-run   # print the plan, spawn nothing
 ```
 
 Runs land in `~/.ringer/runs/`. Raw worker logs land in `<workdir>/logs/`.
@@ -183,8 +184,8 @@ Pattern-selection judgment:
 **The engine choice belongs to the human — but the recommendation comes
 from THEIR evidence.** Before the FIRST run of a job: read what's wired up
 (`[engines.<name>]` blocks in `~/.config/ringer/config.toml`), run
-`./ringer.py models --task-type <this job's type>` for the local scoreboard,
-and glance at `./ringer.py catalog --changes` for anything newly free or
+`ringer models --task-type <this job's type>` for the local scoreboard,
+and glance at `ringer catalog --changes` for anything newly free or
 newly cheap. Then ask the user which model should do the typing — top 2–3
 options with the NUMBERS in the pitch and a recommendation, e.g.: *"GLM is
 6/6 first-try on persona work here at ~2¢/task — recommended. Codex is also
@@ -199,7 +200,7 @@ recommend from a different user's numbers.
 pick means never learning a new one. In any run of 3+ tasks that has a
 low-stakes lane (docs sweeps, mechanical edits, persona reviews — strong
 executed check, retry to absorb failure), assign roughly ONE task to an
-exploration candidate from `./ringer.py models --explore --task-type <type>`
+exploration candidate from `ringer models --explore --task-type <type>`
 (untested + cheap or free, text-capable, decent context). Free promos from
 `catalog --changes` jump the queue — a temporarily-free model is a zero-cost
 experiment. Never explore on time-critical work, never with more than a
@@ -238,7 +239,7 @@ per task via the manifest `engine` field. Defaults are deliberate:
 - Match `timeout_s` to the task: conversational harness tasks and
   build-and-test checks need far more than file edits.
 - **Check the evidence before assigning models to tasks.** Run
-  `./ringer.py models` (optionally `--task-type <type>`) — the local
+  `ringer models` (optionally `--task-type <type>`) — the local
   scoreboard aggregating every executed-check outcome per (model,
   task_type): first_try_pass_rate is the routing signal; pass_rate includes
   retry rescues. Then read `docs/MODEL-NOTES.md` (in the ringer repo) for
@@ -246,7 +247,7 @@ per task via the manifest `engine` field. Defaults are deliberate:
   not vibes (Jon directive 2026-07-06).
 - **"Show me the scoreboard" is one command.** When the human asks to see
   the model scoreboard, rankings, model costs, or "which models work best,"
-  run `./ringer.py models --open` — it renders the full scoreboard (tiers,
+  run `ringer models --open` — it renders the full scoreboard (tiers,
   first-try rates, est. $/task, usage, MODEL-NOTES excerpts, free-promo
   watchlist) as a zero-LLM HTML page in the artifact library and opens it
   in their browser. Costs no tokens; never hand-summarize the numbers when
@@ -296,9 +297,9 @@ someone's untracked scratch files.
    what happened (attempts, tokens, failure mode), what you'd do
    differently. Only what the executed checks and raw logs support. The raw
    numbers took care of themselves — every attempt already landed in the
-   local model log (`./ringer.py models` to see the updated scoreboard).
+   local model log (`ringer models` to see the updated scoreboard).
 
-## Baked-in invariants (preserve in any change to ringer.py)
+## Baked-in invariants (preserve in any change to ringer)
 
 Stdin closed (`< /dev/null`); sandbox mode explicit; verification executes
 the artifact; logs carry raw worker output only. These are load-bearing —
