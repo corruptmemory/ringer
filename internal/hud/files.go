@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/corruptmemory/ringer/internal/artifact"
+	"github.com/corruptmemory/ringer/internal/hud/views"
 	"github.com/corruptmemory/ringer/internal/state"
 	"github.com/go-chi/chi/v5"
 )
@@ -92,7 +93,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	logPath, ok := s.taskLogPath(runID, taskKey)
+	logPath, status, ok := s.taskLogInfo(runID, taskKey)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -105,38 +106,41 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	// A live-tailing HTML page (self-refreshes to the bottom while the task
+	// runs, static once it is terminal). templ HTML-escapes the log body.
+	running := status == "running" || status == "pending"
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(tail)
+	_ = views.LogViewPage(runID, taskKey, string(tail), running).Render(r.Context(), w)
 }
 
-func (s *Server) taskLogPath(runID, taskKey string) (string, bool) {
+func (s *Server) taskLogInfo(runID, taskKey string) (logPath, status string, ok bool) {
 	runsRoot, err := filepath.Abs(filepath.Join(s.stateDir, "runs"))
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 	candidate, err := filepath.Abs(filepath.Join(runsRoot, runID+".json"))
 	if err != nil || filepath.Dir(candidate) != runsRoot {
-		return "", false
+		return "", "", false
 	}
 	data, err := os.ReadFile(candidate)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			s.lg.Warnf("hud: run-state read %s: %v", candidate, err)
 		}
-		return "", false
+		return "", "", false
 	}
 	var rs state.RunState
 	if err := jsonUnmarshal(data, &rs); err != nil {
 		s.lg.Warnf("hud: run-state parse %s: %v", candidate, err)
-		return "", false
+		return "", "", false
 	}
 	for _, t := range rs.Tasks {
 		if t.Key == taskKey && t.LogPath != "" {
-			return t.LogPath, true
+			return t.LogPath, t.Status, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
 
 func tailBytes(path string, max int) ([]byte, error) {

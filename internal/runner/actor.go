@@ -78,6 +78,9 @@ func (a *actor) run() {
 				if tv.StartedAt == "" { // first transition to running only; a retry's 2nd setStatus must not overwrite it
 					tv.StartedAt = c.ts
 				}
+				if c.logPath != "" {
+					tv.LogPath = c.logPath // make the live worker log reachable WHILE the task runs, not only after it finishes
+				}
 			}
 		case opSetResult:
 			if tv := a.tasks[c.key]; tv != nil {
@@ -129,8 +132,8 @@ func (a *actor) stopAndWait() { a.stop(); a.wait() }
 // setStatus and setResult are fire-and-forget: the send rendezvous with run()'s
 // receive (so ordering is preserved), but the caller does not block until the
 // mutation is applied — it has no need to.
-func (a *actor) setStatus(key, status string, attempt int, ts string) {
-	a.cmds <- actorCmd{op: opSetStatus, key: key, status: status, attempt: attempt, ts: ts}
+func (a *actor) setStatus(key, status string, attempt int, logPath, ts string) {
+	a.cmds <- actorCmd{op: opSetStatus, key: key, status: status, attempt: attempt, logPath: logPath, ts: ts}
 }
 
 func (a *actor) setResult(key, status string, tokens int64, verified, logPath, ts string, deliverables []state.Deliverable, checkTail string, notes []string) {

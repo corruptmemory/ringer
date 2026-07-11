@@ -62,14 +62,32 @@ func TestArtifactsSymlinkEscapeDenied(t *testing.T) {
 func TestLogsTail(t *testing.T) {
 	dir := t.TempDir()
 	logPath := filepath.Join(t.TempDir(), "a.worker.log")
-	_ = os.WriteFile(logPath, []byte(strings.Repeat("H", 6*1024)+strings.Repeat("T", 64*1024)), 0o644)
-	_ = state.WriteRunState(dir, state.RunState{RunID: "run-1", Tasks: []state.TaskView{{Key: "a", LogPath: logPath}}})
+	// The 18KB head is fully truncated by the 64KB byte-tail; only the tail
+	// marker survives. Distinct tokens keep the assertion robust to the
+	// inlined artifact CSS embedded in the page.
+	_ = os.WriteFile(logPath, []byte(strings.Repeat("HEADMARK ", 2000)+strings.Repeat("TAILMARK ", 8000)), 0o644)
+	_ = state.WriteRunState(dir, state.RunState{RunID: "run-1", Tasks: []state.TaskView{{Key: "a", Status: "running", LogPath: logPath}}})
 	srv := New(dir, nil).Handler()
 
 	rec := httptest.NewRecorder()
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/logs/run-1/a", nil))
-	if rec.Code != http.StatusOK || len(rec.Body.String()) != 64*1024 || strings.Contains(rec.Body.String(), "H") {
-		t.Fatalf("tail wrong: code=%d len=%d", rec.Code, len(rec.Body.String()))
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code=%d", rec.Code)
+	}
+	if !strings.Contains(body, "TAILMARK") || strings.Contains(body, "HEADMARK") {
+		t.Fatalf("tail wrong: hasTail=%v hasHead=%v", strings.Contains(body, "TAILMARK"), strings.Contains(body, "HEADMARK"))
+	}
+	// A running task's log view live-tails: self-refreshes to the #bottom anchor.
+	if !strings.Contains(body, `http-equiv="refresh"`) || !strings.Contains(body, `id="bottom"`) {
+		t.Fatal("running log view should self-refresh to #bottom")
+	}
+	// A finished task's log view is static — no refresh meta.
+	_ = state.WriteRunState(dir, state.RunState{RunID: "run-1", Tasks: []state.TaskView{{Key: "a", Status: "passed", LogPath: logPath}}})
+	r2 := httptest.NewRecorder()
+	srv.ServeHTTP(r2, httptest.NewRequest(http.MethodGet, "/logs/run-1/a", nil))
+	if strings.Contains(r2.Body.String(), `http-equiv="refresh"`) {
+		t.Fatal("finished log view must not self-refresh")
 	}
 	for _, bad := range []string{"/logs/run-1/nope", "/logs/..%2f..%2fetc/a"} {
 		r := httptest.NewRecorder()
