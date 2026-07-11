@@ -81,6 +81,37 @@ func TestScanRunStatesSortCapSkip(t *testing.T) {
 	// garbage.json skipped, not counted or panicking.
 }
 
+func TestScanRunStatesMarksOrphanDied(t *testing.T) {
+	dir := t.TempDir()
+	// Orphan: not Done, never registered in active-runs (crashed / hard-killed).
+	if err := state.WriteRunState(dir, state.RunState{
+		RunID: "ghost-1", RunName: "ghost", Done: false,
+		Tasks: []state.TaskView{{Key: "t", Status: "running"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Live: not Done, registered with this test's (alive) pid → must stay live.
+	if err := state.WriteRunState(dir, state.RunState{
+		RunID: "alive-1", RunName: "alive", Done: false, PID: os.Getpid(),
+		Tasks: []state.TaskView{{Key: "t", Status: "running"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.RegisterActiveRun(dir, "alive-1", "jim", "alive", "/w", os.Getpid(), "2026-07-09T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]state.RunState{}
+	for _, r := range New(dir, nil).scanRunStates() {
+		byID[r.RunID] = r
+	}
+	if !byID["ghost-1"].Died {
+		t.Fatal("orphan run (absent from pid-pruned active-runs) must be marked Died")
+	}
+	if byID["alive-1"].Died {
+		t.Fatal("live run (registered with an alive pid) must NOT be marked Died")
+	}
+}
+
 func TestHudRunsEmpty(t *testing.T) {
 	srv := New(t.TempDir(), nil).Handler()
 	rec := httptest.NewRecorder()

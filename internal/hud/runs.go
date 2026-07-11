@@ -56,9 +56,22 @@ func (s *Server) scanRunStates() []state.RunState {
 	if len(out) > hudRunsLimit {
 		out = out[:hudRunsLimit]
 	}
+	// An orphan run — not Done but absent from the pid-pruned active-runs
+	// registry (its orchestrator crashed or was hard-killed) — is flagged
+	// Died so the HUD renders it "died" instead of perpetually "working".
+	// Same liveness signal artifact.ReconcileDeadRuns uses for the library.
+	// Only trust the signal when active-runs read cleanly (else leave as-is,
+	// so a transient read error never falsely buries a live run).
+	active, activeErr := state.ReadActiveRuns(s.stateDir)
 	res := make([]state.RunState, len(out))
 	for i, st := range out {
-		res[i] = st.rs
+		rs := st.rs
+		if activeErr == nil && !rs.Done {
+			if _, ok := active[rs.RunID]; !ok {
+				rs.Died = true
+			}
+		}
+		res[i] = rs
 	}
 	return res
 }

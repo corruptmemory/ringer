@@ -83,6 +83,10 @@
       .live-dot.live { animation: pulse 1.4s ease-in-out infinite; }
       @keyframes pulse { 50% { opacity: .35; } }
     }
+    /* An orphaned run (not Done but its orchestrator is gone): fail-colored
+       dot + dimmed card, so a crashed/killed run reads as "died", not live. */
+    .run.died { opacity: .78; }
+    .run.died .live-dot { background: var(--fail); }
     .eyebrow {
       font-size: 12px; font-weight: 700; letter-spacing: .12em;
       text-transform: uppercase; color: var(--muted);

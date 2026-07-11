@@ -10,6 +10,9 @@ import (
 // string, dashboard/ringside.html:885-889).
 func OutcomeText(rs state.RunState) string {
 	pass := PassCount(rs)
+	if RunState(rs) == "died" {
+		return fmt.Sprintf("died · %d passed", pass)
+	}
 	if RunState(rs) == "live" {
 		return fmt.Sprintf("%d passed so far", pass)
 	}
