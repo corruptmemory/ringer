@@ -2,7 +2,7 @@
 
 A running log of how models perform on real Ringer tasks, so engine and
 model choices are made on evidence instead of vibes. The raw numbers now
-live in the local eval log (`~/.ringer/runs.jsonl`); run `./ringer.py models`
+live in the local eval database (`~/.ringer/ringer.db`); run `ringer models`
 to print the per-model, per-task_type scoreboard (tasks, attempts,
 pass_rate, first_try_pass_rate, median duration/tokens, last_seen). This
 file remains the judgment layer on top of those numbers.
@@ -30,7 +30,7 @@ checks and raw logs support — no vibes, no worker self-reports.
   316s/~175k tok; final brand+market-test reskin 622s/~184k tok), both passed
   14-assertion content checks on attempt 1, including base64-embedding photos
   and honoring honesty-marker requirements. Codex remains the site-build lane.
-- 2026-07-06 — ringer.py feature batch (task_type field + enriched eval rows
+- 2026-07-06 — Ringer feature batch (task_type field + enriched eval rows
   + `models` scoreboard + hud single-tab fix; ~640-line diff incl. two new
   test suites): substance passed on attempt 1 — its check printed PASS
   (compile, all 16 suites, exact CLI aggregation contract) — but the run
@@ -68,7 +68,7 @@ checks and raw logs support — no vibes, no worker self-reports.
   findings fixed in one batch, PASS attempt 1, 141s.
 - 2026-07-06 — model-db stack (SQLite read model 516s, page redesign 536s,
   Ringside tab 527s, plus three fix batches all attempt-1): five substantial
-  ringer.py features in one day, every one against an executed contract
+  Ringer features in one day, every one against an executed contract
   check. Review lane found the HIGH that mattered (sync cursor skipping a
   half-written trailing line). Codex is the proven lane for both sides of
   the review->fix loop on this codebase.
@@ -231,8 +231,8 @@ checks and raw logs support — no vibes, no worker self-reports.
   reading seeded scoreboard numbers, remember 2026-07-06 first-try rates
   are depressed by this.
 - 2026-07-06 — the model log is now automatic: every attempt row carries
-  model/task_type/retry; `./ringer.py models` prints the scoreboard; 81
-  historical rows were seeded via scripts/backfill_model_log.py with a
+  model/task_type/retry; `ringer models` prints the scoreboard; 81
+  historical rows were seeded via `ringer db import` with a
   hand-authored task-type mapping. Give every manifest task a task_type or
   its evidence buckets as (untyped).
 
