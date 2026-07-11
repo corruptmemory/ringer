@@ -8,6 +8,20 @@
 
 **Tech Stack:** Go 1.26, module `github.com/corruptmemory/ringer`, `CGO_ENABLED=0`, go-flags subcommands, stdlib `regexp` (RE2), `crypto/sha256`, `encoding/json`, `//go:embed`. Build/test ONLY via `./build.sh` and `./build.sh --test [--race]`.
 
+---
+
+## STATUS — EXECUTED & REVIEWED (2026-07-11, branch `go-5c`, commits `275aa93..f3a669d`)
+
+All 5 tasks executed via superpowers subagent-driven-development (haiku transcription implementers, sonnet per-task reviewers, opus whole-branch review). `./build.sh --test --race` GREEN all 21 packages. **Opus whole-branch review = READY TO MERGE** (0 Critical, 0 Important). Per-task reviews all Approved. Shipped as recorded, with these notes:
+
+- **DEVIATION (reviewer-endorsed improvement over this plan's code):** `commandInvokesRinger` (Task 1) checks the **first token** (+ a `ringer.py`-ish second token) rather than the all-token scan written in Task 1 Step 1 of this plan. The plan's all-token version would have matched `grep ringer notes.txt` (token `ringer`), contradicting the brief's own `no` test case. The shipped first/second-token form passes all cases and correctly avoids suppressing a legitimate `python3 ringer_probe.py` nudge. **Shipped code is authoritative; this plan's Task-1 code block is the superseded version.**
+- **Design decisions (as planned, all held):** two packages (`internal/nudge` + `internal/agent`); SKILL.md embedded as a committed copy at `internal/agent/SKILL.md`, drift-locked to `.claude/skills/ringer/SKILL.md` via `TestEmbeddedSkillMatchesCanonical` (cmp byte-identical, 18694 bytes); hook marker `nudge-hook`; `settings.json` modeled as `map[string]any` (unknown keys survive); nudge stdout compact JSON; dropped Python's unreachable `command_references_active_workdir`.
+- **Cross-cutting verified by the opus pass:** install→hook→gate loop is coherent (hook's `RINGER_HOME`/`~/.ringer` default coincides with config `StateDirPath()` default, so the hook reads the same `active-runs.json` `ringer run` writes); concurrency safe (atomic tmp+rename writes, `O_CREATE|O_EXCL` marker claim — residual lost-updates are Python-parity benign, worst case one extra advisory nudge); exit-0 discipline holds for the installer-registered command; settings.json writes are backup-first + atomic and never drop unknown keys; NUDGE_TEXT/regexes/event-names/matchers/thresholds/marker byte-faithful to `hooks/ringer_nudge.py`; layering clean and purely additive (0 deletions).
+- **Accepted-to-ship Minors (deferred, none merge-blocking):** `commandInvokesRinger` narrower than Python's substring guard (only bites a wrapped command that *also* trips a provider/harness regex → one superfluous advisory); `loadPostEditState` self-heals corrupt state JSON (vs Python permanently-stuck); a handful of brief-authored test-hardening gaps (writeSettings key-order not asserted, `loadSettings`/`backupFile` covered only via Install, round-trip "no ringer hooks" comment stronger than its assertion, uninstall stray-positional untested, `scope :=` duplicated in the two Execute methods).
+- **CARRY-FORWARD to 5d:** README migration note — a user with a non-default config `state_dir` should set `$RINGER_HOME` to match, or the hook's live-run suppression silently stops firing (benign: an extra advisory, never a broken tool call). Also 5d cutover deletes `hooks/ringer_nudge.py` + the Python `install-agent`/`uninstall-agent`; legacy `python3 …/ringer_nudge.py` hooks in a user's settings.json are NOT auto-cleaned by the Go uninstaller (marker is `nudge-hook`) — README should tell migrating users to `uninstall-agent` under Python first, or manually drop the stale hook.
+
+---
+
 ## Global Constraints
 
 These are frozen external contracts (spec §3, §4, §9.9) — copy the exact values; do not paraphrase.
