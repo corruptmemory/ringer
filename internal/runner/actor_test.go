@@ -21,7 +21,7 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 		wg.Add(1)
 		go func(k string) {
 			defer wg.Done()
-			a.setStatus(k, "running", 1, "2026-07-09T00:00:01Z")
+			a.setStatus(k, "running", 1, "/logs/"+k, "2026-07-09T00:00:01Z")
 			a.setResult(k, "passed", 100, "did the thing", "/logs/"+k, "2026-07-09T00:00:04Z", nil, "", nil)
 		}(k)
 	}
@@ -44,6 +44,20 @@ func TestActorConcurrentUpdatesThenSnapshot(t *testing.T) {
 		if tv.Model != modelByKey[tv.Key] {
 			t.Errorf("task %s: Model = %q, want %q", tv.Key, tv.Model, modelByKey[tv.Key])
 		}
+	}
+}
+
+// TestActorSetStatusRecordsLogPath proves a task carries its worker-log path
+// the moment it goes "running" (not only after it finishes) — so the HUD can
+// tail the live log while the task is still working.
+func TestActorSetStatusRecordsLogPath(t *testing.T) {
+	a := newActor("r1", "demo", "id", []string{"a"}, map[string]string{"a": "codex"}, map[string]string{"a": ""}, logging.Default())
+	a.start()
+	defer a.stopAndWait()
+	a.setStatus("a", "running", 1, "/logs/a.worker.log", "2026-07-09T00:00:01Z")
+	snap := a.snapshot()
+	if got := snap.Tasks[0]; got.Status != "running" || got.LogPath != "/logs/a.worker.log" {
+		t.Fatalf("running task must carry LogPath for live tailing: %+v", got)
 	}
 }
 

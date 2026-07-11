@@ -320,7 +320,7 @@ func runTask(ctx context.Context, opts Options, a *actor, col *collector, lg log
 
 	for attempt := 1; attempt <= 2; attempt++ {
 		attempts = attempt
-		a.setStatus(task.Key, "running", attempt, time.Now().UTC().Format(time.RFC3339))
+		a.setStatus(task.Key, "running", attempt, logPath, time.Now().UTC().Format(time.RFC3339))
 
 		// Timed from worker spawn through verify completion (Python parity:
 		// per-attempt wall time), so duration_s is populated for every row
