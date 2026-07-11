@@ -48,6 +48,12 @@ type ScoreboardConfig struct {
 	ModelNotesPath    string `toml:"model_notes_path"`    // empty -> embedded docs/MODEL-NOTES.md
 }
 
+// CatalogConfig overrides where the OpenRouter model catalog is fetched
+// from. Source empty -> catalog.DefaultSource (see AppConfig.CatalogSource).
+type CatalogConfig struct {
+	Source string `toml:"source"`
+}
+
 type AppConfig struct {
 	IdentityDefault string                  `toml:"identity_default"`
 	StateDir        string                  `toml:"state_dir"` // empty -> ~/.ringer
@@ -56,6 +62,7 @@ type AppConfig struct {
 	Eval            EvalConfig              `toml:"eval"`
 	Artifact        ArtifactConfig          `toml:"artifact"`
 	Scoreboard      ScoreboardConfig        `toml:"scoreboard"`
+	Catalog         CatalogConfig           `toml:"catalog"`
 	Engines         map[string]EngineConfig `toml:"engines"`
 }
 
@@ -121,6 +128,12 @@ func (c *AppConfig) ModelNotesPath() string {
 		return ""
 	}
 	return ExpandUser(c.Scoreboard.ModelNotesPath)
+}
+
+// CatalogSource returns the configured catalog fetch source override, or ""
+// to signal "use the caller's default" (catalog.DefaultSource).
+func (c *AppConfig) CatalogSource() string {
+	return c.Catalog.Source
 }
 
 func Load(path string) (*AppConfig, error) {

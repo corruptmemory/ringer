@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/engine"
@@ -146,6 +147,11 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 	} else {
 		st = s
 		defer st.Close()
+		// Best-effort background catalog refresh (spec §3): throttled to once
+		// per 24h, never blocks or fails the run. Skipped entirely on
+		// --dry-run (this whole branch is unreachable there — the dry-run
+		// path returns above) and when the store itself is unavailable.
+		maybeRefreshCatalog(st, catalogSourceOrDefault(cfg), lg, time.Now().UTC().Format(time.RFC3339))
 	}
 
 	var artWriter runner.ArtifactWriter

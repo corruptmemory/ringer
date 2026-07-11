@@ -8,6 +8,19 @@ import (
 )
 
 func (s *Store) CatalogModels() ([]catalog.Model, error) { return s.queryCatalog("") }
+
+// NewestCatalogFetchedAt returns the fetched_at of the most recently
+// refreshed catalog row, or "" if the catalog has never been fetched.
+func (s *Store) NewestCatalogFetchedAt() (string, error) {
+	var v *string
+	err := withBusyRetry(func() error {
+		return s.db.QueryRow(`SELECT MAX(fetched_at) FROM catalog_models`).Scan(&v)
+	})
+	if err != nil || v == nil {
+		return "", err
+	}
+	return *v, nil
+}
 func (s *Store) FreeCatalogModels() ([]catalog.Model, error) {
 	return s.queryCatalog("WHERE free=1")
 }
