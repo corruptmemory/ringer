@@ -114,6 +114,31 @@ func TestPortFlagParsing(t *testing.T) {
 	})
 }
 
+func TestCheckFullAccessGate(t *testing.T) {
+	full := []manifest.Task{{Key: "a", Engine: "codex", FullAccess: true}}
+	safe := []manifest.Task{{Key: "b", Engine: "codex"}}
+	cases := []struct {
+		name    string
+		tasks   []manifest.Task
+		allow   bool
+		wantErr bool
+	}{
+		{"full-access refused when gate off", full, false, true},
+		{"full-access allowed when gate on", full, true, false},
+		{"no full-access, gate off", safe, false, false},
+		{"no full-access, gate on", safe, true, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &manifest.Manifest{Workdir: t.TempDir(), Tasks: tc.tasks}
+			err := checkFullAccessGate(m, tc.allow)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("checkFullAccessGate = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // TestRunManifestFileDryRunIgnoresHudPort proves the dry-run path never
 // spawns/ensures a HUD (brief Step 6). It swaps the package-level ensureHUD
 // seam for a recorder and asserts it is NOT called on a dry-run — so if the
