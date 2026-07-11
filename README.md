@@ -299,6 +299,8 @@ Four rules are baked into every worker invocation. They all cost us real debuggi
 
 [PolyForm Shield 1.0.0](LICENSE.md) — free to use, modify, and share, including inside your own commercial work. The one thing you can't do is offer Ringer or Ringside (or a derivative that competes with them) as a product or service of your own. Commercial rights to the tool itself belong to Nate Jones Media LLC.
 
+See [PROVENANCE.md](PROVENANCE.md) for the project's origins and credits — Ringer and Ringside were created by Jonathan Edwards; this repository is a Go rewrite that keeps their product design intact.
+
 ## Requirements
 
 Ringer ships as a single static binary — macOS and Linux (Windows via WSL). To run it, that's the whole list; you also need at least one agent CLI (Codex works out of the box).
