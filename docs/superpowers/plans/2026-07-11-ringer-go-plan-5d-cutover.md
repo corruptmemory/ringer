@@ -8,6 +8,22 @@
 
 **Tech Stack:** Go 1.26, module `github.com/corruptmemory/ringer`, `CGO_ENABLED=0`. Build/test ONLY via `./build.sh` and `./build.sh --test [--race]`. Git deletions via `git rm -r`.
 
+---
+
+## STATUS — EXECUTED & REVIEWED (2026-07-11, branch `go-5d`, commits `7c2d18d..df01476`)
+
+Executed via superpowers subagent-driven-development. `./build.sh --test --race` GREEN all 21 packages. **Opus whole-branch review = READY TO MERGE** (0 Critical, 0 Important; 1 defer-able Minor: a "Python parity" rationale comment in `config.sample.toml`). Per-task reviews all Approved. The repo is now **Go-only**: opus confirmed no tracked `.rs`/`.swift`/`Cargo.*`/`tauri` files remain, the only `.py` are the kept `templates/*/checks/*.py` product scripts, CI is Go-only, and spec §11 is complete.
+
+- **Rewrite metrics (Task 1, `docs/go-rewrite-metrics.md`):** production "money" code 11,354 → 7,977 (**−29.7%**: Python 6,488 + Rust/Tauri 852 + dashboard HTML 4,014 → Go 7,369 + templ 608); tests 4,360 → 6,400 (**+46.8%**); test:production ratio 0.38 → 0.80 (**~2.1×**); Go coverage mean **76.7%** (21 pkgs); `ringer.py`'s 8,300-line monolith → 22 focused packages (largest 590). Numbers cloc-measured before deletion (both codebases coexisting) and independently reproduced in review.
+- **`allow_full_access` gate (Task 2):** `checkFullAccessGate` in `cmd/ringer/run.go` — fail-closed, refuses a `full_access` task unless the operator opted in; placed before the dry-run branch so it refuses on both paths. The config had documented this gate since Plan 2 but never enforced it.
+- **Deletion (Task 3):** `ringer.py` + `hud/` (Tauri) + `dashboard/` + `scripts/` + `hooks/` + `tests/` + `engines/mock_worker.py` + `.github/workflows/release.yml` = 90 files / 24,219 lines. Kept: `engines/opencode-sandboxed.sh`, `templates/**` (incl. `.py` check scripts), `registry/`, `docs/`, `ci.yml`, all Go provenance comments.
+- **README sweep (Task 4):** 14 `ringer.py`→`ringer`, dropped Python/Rust requirements + the Tauri paragraph, added two migration notes (`$RINGER_HOME`/`state_dir`; legacy-hook cleanup). BEYOND-BRIEF (reviewer-verified accurate vs source): also corrected stale JSONL/Postgres eval-store prose to the SQLite reality.
+- **PROVENANCE.md (Task 4.5, added mid-execution per Jim's direction):** credits original author **Jonathan Edwards** and copyright holder **Nate Jones Media LLC**, carries the PolyForm Shield Required Notice verbatim, frames this repo as a Go rewrite preserving their product design; the two stale pre-rewrite working notes were removed (full text in git history, credit distilled into PROVENANCE.md). Every attribution claim was corroborated against `git log` + `LICENSE.md` in review.
+- **SKILL.md sweep (Task 5):** retargeted every invocation to the `ringer` binary + re-`cp`'d to `internal/agent/SKILL.md` (drift-lock `cmp`-identical, `TestEmbeddedSkillMatchesCanonical` green).
+- **Straggler sweep (`df01476`):** the plan's own final-verification grep caught two user-facing docs Task 4/5 scope missed — `docs/MODEL-NOTES.md` (embedded judgment notes) + `templates/README.md` — swept to the Go binary (no test asserts on MODEL-NOTES content, so the embed change was safe).
+
+---
+
 ## Global Constraints
 
 - **This is one PR, one coherent cutover** (spec §11). After it lands the repo has no Python/Rust implementation, only Go + language-agnostic product content.
