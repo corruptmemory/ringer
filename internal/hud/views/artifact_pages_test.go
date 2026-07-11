@@ -170,12 +170,19 @@ func TestIndexPageGolden(t *testing.T) {
 		{RunID: "run-124", RunName: "live-run", Identity: "id", Done: false, StartedAt: "2026-07-10T10:02:00Z", UpdatedAt: "2026-07-10T10:02:20Z",
 			Tasks: []state.TaskView{{Status: "running"}}},
 	}
-	rows := BuildIndexRows(runs, "/s")
+	rows := BuildIndexRows(runs)
 	page := renderComponentString(t, IndexPage(rows))
 	assertGolden(t, "index_page.golden.html", page)
-	for _, must := range []string{"refresh", "demo", "live-run", "file://", "<table"} {
+	// Live/report links are artifacts-root-relative bare filenames so they
+	// resolve under both HTTP serving and file:// opening.
+	for _, must := range []string{"refresh", "demo", "live-run", "<table", `href="run-123.html"`, `href="run-123-report.html"`} {
 		if !strings.Contains(page, must) {
 			t.Errorf("index page missing %q", must)
 		}
+	}
+	// An absolute file:// URI is dead when the index is served over HTTP —
+	// the whole reason these hrefs are relative. Guard against regressing.
+	if strings.Contains(page, "file://") {
+		t.Error("index page must not emit absolute file:// links (breaks HTTP serving)")
 	}
 }

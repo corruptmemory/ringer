@@ -453,9 +453,15 @@ type IndexRow struct {
 // given (the caller owns newest-first ordering — the pattern
 // render_artifact_index_html itself follows, taking an already-sorted
 // entries list rather than sorting internally). LiveHref/ReportHref are
-// file:// URIs into the run's artifacts directory; ReportHref is left empty
-// until the run is done, mirroring Python's report_ready gate.
-func BuildIndexRows(runs []state.RunState, stateDir string) []IndexRow {
+// artifacts-root-relative (bare "<run_id>.html" / "<run_id>-report.html"):
+// index.html lives at the artifacts root and the run pages are its siblings,
+// so a relative href resolves under BOTH the HUD's HTTP serving
+// (/artifacts/<run_id>.html) and a straight-from-disk file:// open — the same
+// dual-context rule the breadcrumb and every deliverable href already follow.
+// An absolute file:// URI, by contrast, is dead when the index is served over
+// HTTP (browsers refuse file:// navigation from an http:// page). ReportHref
+// is left empty until the run is done, mirroring Python's report_ready gate.
+func BuildIndexRows(runs []state.RunState) []IndexRow {
 	rows := make([]IndexRow, 0, len(runs))
 	for _, rs := range runs {
 		row := IndexRow{
@@ -465,10 +471,10 @@ func BuildIndexRows(runs []state.RunState, stateDir string) []IndexRow {
 			Elapsed:  FormatDuration(RunElapsed(rs)),
 			Pass:     PassCount(rs),
 			Fail:     FailCount(rs),
-			LiveHref: "file://" + filepath.Join(artifact.ArtifactsDir(stateDir), rs.RunID+".html"),
+			LiveHref: rs.RunID + ".html",
 		}
 		if rs.Done {
-			row.ReportHref = "file://" + filepath.Join(artifact.ArtifactsDir(stateDir), rs.RunID+"-report.html")
+			row.ReportHref = rs.RunID + "-report.html"
 		}
 		rows = append(rows, row)
 	}

@@ -164,7 +164,7 @@ func (w *Writer) writeIndex() {
 		w.lg.Warnf("artifact: scan runs for index: %v", err)
 		return
 	}
-	w.renderFile(w.cfg.IndexPath, views.IndexPage(views.BuildIndexRows(runs, w.stateDir)))
+	w.renderFile(w.cfg.IndexPath, views.IndexPage(views.BuildIndexRows(runs)))
 }
 
 // updateLibraryLive is throttled to once per libraryLiveThrottle for an
