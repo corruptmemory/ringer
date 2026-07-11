@@ -167,6 +167,15 @@ func (w *Writer) writeIndex() {
 	w.renderFile(w.cfg.IndexPath, views.IndexPage(views.BuildIndexRows(runs)))
 }
 
+// RefreshIndex regenerates the all-runs index.html from current state with THIS
+// binary's renderer. The index is a static file written by `ringer run`, so
+// after a code change it stays as stale as whichever binary last ran wrote it
+// (e.g. an in-flight run on an old binary can re-emit the pre-fix index on
+// completion). The HUD calls this on startup so that restarting the HUD — the
+// natural "refresh it" gesture — actually re-renders the index with the running
+// binary, rather than serving a stale file it has no other reason to rewrite.
+func (w *Writer) RefreshIndex() { w.writeIndex() }
+
 // updateLibraryLive is throttled to once per libraryLiveThrottle for an
 // unchanged outcome — Live is called far more often (every runner flush
 // tick) than library.json needs to be rewritten.
