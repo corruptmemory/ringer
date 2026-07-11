@@ -16,6 +16,18 @@ type rootOptions struct {
 var opts rootOptions
 var parser = flags.NewParser(&opts, flags.Default)
 
+// loadConfig resolves the config path (--config flag, else
+// config.DefaultPath()) and loads it. Shared by commands that need cfg
+// before doing anything else; hud.go/run.go still inline this (out of scope
+// to refactor here — see Task 7's brief).
+func loadConfig() (*config.AppConfig, error) {
+	cfgPath := opts.Config
+	if cfgPath == "" {
+		cfgPath = config.DefaultPath()
+	}
+	return config.Load(cfgPath)
+}
+
 // resolveLogLevel implements flag ?? config ?? default precedence. cfg may be nil.
 func resolveLogLevel(flagValue string, cfg *config.AppConfig) (slog.Level, error) {
 	if flagValue != "" {

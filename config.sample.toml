@@ -172,3 +172,15 @@ enabled = true
 # out        = "~/.ringer/artifacts/{run_id}.html"
 # report_out = "~/.ringer/artifacts/{run_id}-report.html"
 # index_out  = "~/.ringer/artifacts/index.html"
+
+# Optional overrides for the model scoreboard's identity/notes files. Empty or absent -> the
+# embedded defaults (registry/model-identity.toml, docs/MODEL-NOTES.md). A path here overrides
+# just that one file.
+# [scoreboard]
+# model_identity_path = "~/.ringer/model-identity.toml"
+# model_notes_path = "~/.ringer/MODEL-NOTES.md"
+
+# Optional override for where the OpenRouter model catalog is fetched from. Empty -> the default
+# OpenRouter URL (https://openrouter.ai/api/v1/models).
+# [catalog]
+# source = "https://openrouter.ai/api/v1/models"

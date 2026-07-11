@@ -1,5 +1,51 @@
 package views
 
-templ ModelsPanel() {
-	<div class="artifact-status">Model analytics land in Plan 5.</div>
+import (
+	"fmt"
+
+	"github.com/corruptmemory/ringer/internal/scoreboard"
+)
+
+// ModelsPanel renders the tiered per-model scoreboard (scoreboard.Scoreboard
+// order preserved) as a table: model display, tier chip, tasks, pass %,
+// first-try %, median tokens, harness. Reuses the modelName/tierColor/
+// pctString/harnessOrUnknown/scoreboardTokString helpers models_scoreboard.templ
+// already established for the standalone `ringer models --html` report, so
+// the live HUD table and the standalone report never drift out of format.
+// Empty rows (missing/empty DB, no attempts yet) render an empty-state line
+// instead of an empty table — models change slowly so a blank table here
+// would otherwise look broken rather than "nothing evaluated yet".
+templ ModelsPanel(rows []scoreboard.Row) {
+	<div id="models" class="agents">
+		if len(rows) == 0 {
+			<div class="artifact-error">No model evidence yet.</div>
+		} else {
+			<table>
+				<thead>
+					<tr>
+						<th>Model</th>
+						<th>Tier</th>
+						<th>Tasks</th>
+						<th>Pass</th>
+						<th>First</th>
+						<th>Tokens</th>
+						<th>Harness</th>
+					</tr>
+				</thead>
+				<tbody>
+					for _, r := range rows {
+						<tr>
+							<td>{ modelName(r) }</td>
+							<td><span class="chip" style={ "background:" + tierColor(r.Tier) }>{ r.Tier }</span></td>
+							<td class="mono">{ fmt.Sprintf("%d", r.Tasks) }</td>
+							<td class="mono">{ pctString(r.PassRate) }</td>
+							<td class="mono">{ pctString(r.FirstTryPassRate) }</td>
+							<td class="mono">{ scoreboardTokString(r.MedianTokens) }</td>
+							<td>{ harnessOrUnknown(r.Harness) }</td>
+						</tr>
+					}
+				</tbody>
+			</table>
+		}
+	</div>
 }

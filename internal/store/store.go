@@ -12,20 +12,25 @@ import (
 	sqlite "modernc.org/sqlite"
 )
 
+// JSON tags are snake_case (matching the `attempts` table's columns) rather
+// than encoding/json's default PascalCase so `ringer db export`'s Go-native
+// JSONL round-trips cleanly back through attemptFromJSONL's native-field
+// lookups (cmd/ringer/db.go), which try these exact keys before falling back
+// to legacy Python names (e.g. "engine" before "worker_engine").
 type Attempt struct {
-	RunID       string
-	RunName     string
-	TaskKey     string
-	Engine      string
-	Model       string
-	TaskType    string
-	Verdict     string // PASS | FAIL | TIMEOUT | ERROR
-	Retry       int
-	DurationS   float64
-	Tokens      int64 // -1 = unknown
-	CheckOutput string
-	Identity    string
-	CreatedAt   string // UTC RFC3339
+	RunID       string  `json:"run_id"`
+	RunName     string  `json:"run_name"`
+	TaskKey     string  `json:"task_key"`
+	Engine      string  `json:"engine"`
+	Model       string  `json:"model"`
+	TaskType    string  `json:"task_type"`
+	Verdict     string  `json:"verdict"` // PASS | FAIL | TIMEOUT | ERROR
+	Retry       int     `json:"retry"`
+	DurationS   float64 `json:"duration_s"`
+	Tokens      int64   `json:"tokens"` // -1 = unknown
+	CheckOutput string  `json:"check_output"`
+	Identity    string  `json:"identity"`
+	CreatedAt   string  `json:"created_at"` // UTC RFC3339
 }
 
 type Store struct{ db *sql.DB }
@@ -39,6 +44,7 @@ var openPragmas = []string{
 }
 
 func Open(path string) (*Store, error) {
+	registerMedian()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}

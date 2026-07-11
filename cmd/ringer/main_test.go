@@ -2,10 +2,49 @@ package main
 
 import (
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/corruptmemory/ringer/internal/config"
 )
+
+// TestLoadConfig locks loadConfig's flag ?? config.DefaultPath() precedence
+// (the extraction Task 7 pulled out of hud.go/run.go's repeated inline
+// pattern): an explicit --config wins, and an unset one falls through to
+// config.Load's own missing-file default (sane zero-value AppConfig, no
+// error).
+func TestLoadConfig(t *testing.T) {
+	prevConfig := opts.Config
+	t.Cleanup(func() { opts.Config = prevConfig })
+
+	t.Run("explicit --config is used", func(t *testing.T) {
+		cfgPath := filepath.Join(t.TempDir(), "config.toml")
+		if err := os.WriteFile(cfgPath, []byte(`identity_default = "desk"`+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		opts.Config = cfgPath
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.IdentityDefault != "desk" {
+			t.Errorf("IdentityDefault = %q, want %q", cfg.IdentityDefault, "desk")
+		}
+	})
+
+	t.Run("empty --config falls through to config.DefaultPath", func(t *testing.T) {
+		opts.Config = ""
+		t.Setenv("RINGER_CONFIG", filepath.Join(t.TempDir(), "nope.toml"))
+		cfg, err := loadConfig()
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.IdentityDefault != "" {
+			t.Errorf("expected default (zero-value) config, got %+v", cfg)
+		}
+	})
+}
 
 func TestResolveLogLevel(t *testing.T) {
 	cases := []struct {
