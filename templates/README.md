@@ -24,7 +24,7 @@ A kit is a reusable Ringer starter: a manifest skeleton, check skeletons, and a 
 
 ## Kit Anatomy
 
-Standard kit files are `manifest.json`, `README.md`, and usually one or more executable helpers under `checks/`. Placeholders use bare identifiers like `{{NAME}}` for required values and freeform prompts like `{{THING — inline guidance}}` when the placeholder itself explains the choice to make. After fill-in, every manifest must pass `./ringer.py lint` before a run. Kit checks are skeletons to adapt to the real task; never turn them into `exit 0`, `true`, or any other check that cannot fail.
+Standard kit files are `manifest.json`, `README.md`, and usually one or more executable helpers under `checks/`. Placeholders use bare identifiers like `{{NAME}}` for required values and freeform prompts like `{{THING — inline guidance}}` when the placeholder itself explains the choice to make. After fill-in, every manifest must pass `ringer lint` before a run. Kit checks are skeletons to adapt to the real task; never turn them into `exit 0`, `true`, or any other check that cannot fail.
 
 ## Composition Guide
 

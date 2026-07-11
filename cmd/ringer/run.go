@@ -123,6 +123,10 @@ func runManifestFile(ctx context.Context, manifestPath string, maxParallelOverri
 		return err
 	}
 
+	if err := checkFullAccessGate(m, cfg.AllowFullAccess); err != nil {
+		return err
+	}
+
 	if dryRun {
 		// Dry-run prints the plan and exits; it must never fail on isolation
 		// selection (a host without a backend should still be able to inspect
@@ -237,6 +241,24 @@ func selectIsolator(m *manifest.Manifest, engines map[string]config.EngineConfig
 	}
 	lg.Infof("isolation backend: %s", iso.Name())
 	return iso, nil
+}
+
+// checkFullAccessGate refuses a run when any task requests full_access but the
+// operator has not opted in via [config] allow_full_access. Fail-closed: the
+// isolation layer already routes full_access tasks around the jail, so this
+// makes the config doc's promised gate ("a task with full_access=true still
+// fails unless this is true") real (spec §6). Applied before the dry-run
+// branch so a forbidden manifest is refused whether you dry-run or run.
+func checkFullAccessGate(m *manifest.Manifest, allowFullAccess bool) error {
+	if allowFullAccess {
+		return nil
+	}
+	for _, t := range m.Tasks {
+		if t.FullAccess {
+			return fmt.Errorf("task %q requests full_access but allow_full_access is not enabled in config; refusing (set allow_full_access = true to opt in)", t.Key)
+		}
+	}
+	return nil
 }
 
 // formatTokens renders a TaskResult's token count for the verdict table.
