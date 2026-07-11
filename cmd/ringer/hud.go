@@ -5,6 +5,7 @@ import (
 
 	"github.com/corruptmemory/ringer/internal/config"
 	"github.com/corruptmemory/ringer/internal/hud"
+	"github.com/corruptmemory/ringer/internal/hud/artifactwriter"
 	"github.com/corruptmemory/ringer/internal/logging"
 )
 
@@ -34,6 +35,10 @@ func (c *hudCmd) Execute(args []string) error {
 	if port == 0 {
 		port = cfg.HudPort()
 	}
+	// Re-render the static all-runs index with THIS binary before serving, so
+	// restarting the HUD refreshes it (it is otherwise only rewritten by
+	// `ringer run`, and can be left stale by an older binary's run).
+	artifactwriter.New(cfg.StateDirPath(), artifactwriter.DefaultConfig(cfg.StateDirPath()), lg).RefreshIndex()
 	return hud.New(cfg.StateDirPath(), lg).ListenAndServe(port) // blocks until killed
 }
 
