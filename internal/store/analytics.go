@@ -236,7 +236,12 @@ SELECT s.model, latest.engine,
 FROM sel s
 LEFT JOIN tok ON tok.model = s.model
 LEFT JOIN latest ON latest.model = s.model
-LEFT JOIN catalog_models cm ON cm.id = s.model
+-- Deliberate divergence from Python: strip openrouter/ prefix to resolve opencode costs.
+-- Cost is only economically meaningful for opencode (per-token); codex/grok are OAuth flat-rate ("in plan").
+LEFT JOIN catalog_models cm ON cm.id = CASE
+  WHEN s.model LIKE 'openrouter/%' THEN substr(s.model, length('openrouter/') + 1)
+  ELSE s.model
+END
 GROUP BY s.model
 ORDER BY CASE tier WHEN 'proven' THEN 0 WHEN 'probation' THEN 1 ELSE 3 END,
   first_rate DESC, pass_rate DESC,

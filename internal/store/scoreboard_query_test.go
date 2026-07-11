@@ -112,6 +112,37 @@ func TestScoreboardModelRows(t *testing.T) {
 	}
 }
 
+func TestScoreboardCostStripsOpenrouterPrefix(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "cost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// opencode model slug carries the openrouter/ prefix; catalog id does not.
+	for _, a := range []Attempt{
+		{RunID: "r1", TaskKey: "t1", Engine: "opencode", Model: "openrouter/z-ai/glm-5.2", TaskType: "code", Verdict: "PASS", Tokens: 1000, CreatedAt: "2026-07-11T00:00:01Z"},
+	} {
+		if err := s.InsertAttempt(a); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := 2.0
+	if err := s.ReplaceCatalog([]catalog.Model{{ID: "z-ai/glm-5.2", PromptPerM: &p, CompletionPerM: &p}}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := s.ScoreboardModelRows(ScoreFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Cost == nil {
+		t.Fatalf("opencode cost did not resolve after prefix strip: %+v", rows)
+	}
+	// median_tokens = 1000, (2+2)/2 = 2 per-M, cost = 1000*2/1e6 = 0.002
+	if *rows[0].Cost != 0.002 {
+		t.Fatalf("cost = %v, want 0.002", *rows[0].Cost)
+	}
+}
+
 // pf dereferences a *float64 for %v-formatting in failure messages (nil-safe).
 func pf(f *float64) any {
 	if f == nil {
