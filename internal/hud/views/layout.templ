@@ -1,9 +1,11 @@
 package views
 
 // Layout is the Ringside page shell. The live panels poll their fragment
-// routes on load and every 2s, morphing the result in (idiomorph) so scroll
-// position and expanded tasks survive each refresh. The panels render empty
-// here; htmx fills them.
+// routes on load, morphing the result in (idiomorph) so scroll position and
+// expanded tasks survive each refresh. Runs/library poll every 2s (fast-
+// moving task state); models polls every 10s (the per-model rollup changes
+// only as slowly as runs complete). The panels render empty here; htmx fills
+// them.
 templ Layout() {
 	<!DOCTYPE html>
 	<html lang="en">
@@ -43,7 +45,7 @@ templ Layout() {
 						id="models-panel"
 						class="panel"
 						hx-get="/hud/models"
-						hx-trigger="load"
+						hx-trigger="load, every 10s"
 						hx-swap="morph:innerHTML"
 					></section>
 				</main>

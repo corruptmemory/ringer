@@ -481,6 +481,19 @@
       padding: clamp(22px, 4vw, 42px);
     }
 
+    /* Lifted from artifact.css's table/chip taxonomy (Task 10, the models
+       panel is the first Ringside panel to need a table). Same tokens as
+       the standalone artifact pages so a tier chip/table cell looks
+       identical whether it's rendered live in Ringside or in a static
+       report. */
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--hairline); vertical-align: top; }
+    th { color: var(--muted); font-weight: 700; font-size: 10px; letter-spacing: 0; }
+    .chip {
+      display: inline-block; padding: 2px 8px; border-radius: 6px;
+      font-size: 10px; font-weight: 800; color: var(--ground); white-space: nowrap;
+    }
+
     @media (max-width: 760px) {
       .topbar-main { flex-wrap: wrap; gap: 6px 10px; }
       .run-head .clock { width: 100%; margin-left: 21px; }

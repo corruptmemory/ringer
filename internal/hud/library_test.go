@@ -32,12 +32,3 @@ func TestHudLibraryReconcilesAndRenders(t *testing.T) {
 		t.Fatal("reconcile flip not persisted")
 	}
 }
-
-func TestHudModelsStub(t *testing.T) {
-	srv := New(t.TempDir(), nil).Handler()
-	rec := httptest.NewRecorder()
-	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/hud/models", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "Plan 5") {
-		t.Fatalf("models stub: code=%d body=%q", rec.Code, rec.Body.String())
-	}
-}

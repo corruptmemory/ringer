@@ -9,9 +9,11 @@ import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
 // Layout is the Ringside page shell. The live panels poll their fragment
-// routes on load and every 2s, morphing the result in (idiomorph) so scroll
-// position and expanded tasks survive each refresh. The panels render empty
-// here; htmx fills them.
+// routes on load, morphing the result in (idiomorph) so scroll position and
+// expanded tasks survive each refresh. Runs/library poll every 2s (fast-
+// moving task state); models polls every 10s (the per-model rollup changes
+// only as slowly as runs complete). The panels render empty here; htmx fills
+// them.
 func Layout() templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
 		templ_7745c5c3_W, ctx := templ_7745c5c3_Input.Writer, templ_7745c5c3_Input.Context
@@ -33,7 +35,7 @@ func Layout() templ.Component {
 			templ_7745c5c3_Var1 = templ.NopComponent
 		}
 		ctx = templ.ClearChildren(ctx)
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Ringside</title><link rel=\"stylesheet\" href=\"/static/ringside.css\"><script src=\"/static/vendor/htmx.min.js\"></script><script src=\"/static/vendor/idiomorph.min.js\"></script></head><body hx-ext=\"morph\"><div class=\"page\"><header class=\"corner topbar\"><span id=\"top-dot\" class=\"live-dot\" aria-hidden=\"true\"></span><div class=\"topbar-main\"><span class=\"eyebrow wordmark\"><b>Ringside</b></span></div><time id=\"clock\" class=\"clock mono\"></time></header><main><section id=\"runs-panel\" class=\"panel\" hx-get=\"/hud/runs\" hx-trigger=\"load, every 2s\" hx-swap=\"morph:innerHTML\"></section><section id=\"library-panel\" class=\"panel\" hx-get=\"/hud/library\" hx-trigger=\"load, every 2s\" hx-swap=\"morph:innerHTML\"></section><section id=\"models-panel\" class=\"panel\" hx-get=\"/hud/models\" hx-trigger=\"load\" hx-swap=\"morph:innerHTML\"></section></main></div></body></html>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 1, "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Ringside</title><link rel=\"stylesheet\" href=\"/static/ringside.css\"><script src=\"/static/vendor/htmx.min.js\"></script><script src=\"/static/vendor/idiomorph.min.js\"></script></head><body hx-ext=\"morph\"><div class=\"page\"><header class=\"corner topbar\"><span id=\"top-dot\" class=\"live-dot\" aria-hidden=\"true\"></span><div class=\"topbar-main\"><span class=\"eyebrow wordmark\"><b>Ringside</b></span></div><time id=\"clock\" class=\"clock mono\"></time></header><main><section id=\"runs-panel\" class=\"panel\" hx-get=\"/hud/runs\" hx-trigger=\"load, every 2s\" hx-swap=\"morph:innerHTML\"></section><section id=\"library-panel\" class=\"panel\" hx-get=\"/hud/library\" hx-trigger=\"load, every 2s\" hx-swap=\"morph:innerHTML\"></section><section id=\"models-panel\" class=\"panel\" hx-get=\"/hud/models\" hx-trigger=\"load, every 10s\" hx-swap=\"morph:innerHTML\"></section></main></div></body></html>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
