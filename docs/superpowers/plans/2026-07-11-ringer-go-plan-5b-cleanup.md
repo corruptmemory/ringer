@@ -1,5 +1,13 @@
 # Ringer Go Plan 5b — Cleanup Batch Implementation Plan
 
+> **STATUS — EXECUTED + reviewed 2026-07-11 (branch `go-5b`).** All 5 tasks ran via subagent-driven-development; opus whole-branch review (Tasks 1–4) = **READY TO MERGE**, 0 Critical / 0 Important. **Task 5 (the visible cost column)** was added after Jim's look-see and task-reviewed clean. Shipped-code is authoritative where it diverges from the task text; the deliberate deviations:
+> - **Task 2:** the scoreboard cost JOIN strips the `openrouter/` prefix (`cm.id = CASE WHEN s.model LIKE 'openrouter/%' THEN substr(s.model, length('openrouter/')+1) ELSE s.model END`) — an approved break from Python parity so opencode cost resolves; codex/grok stay "in plan".
+> - **Task 4:** `config.sample.toml` is now a **generated** artifact (`RenderDocumented(ExampleConfig())`), drift-locked by `TestConfigSampleIsFresh`; regenerating it dropped the stale Python-era keys (`dashboard_port_base`, `hud_app_path`, `[eval] backend`).
+> - **Task 1:** a `var ensureHUD = ensureHUDRunning` seam makes the dry-run "no HUD spawn" test real (closes a Plan-4 fork-bomb-adjacent risk).
+> - **Fast-follow (`152f5aa`):** the gen-config round-trip test now asserts `config.Load` succeeds (value validation), not just decode.
+>
+> **Deferred:** 5c = agent-integration (`install-agent`/`uninstall-agent` + `nudge-hook`); 5d = the hard cutover.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Three focused cleanups on top of the merged Plan 5a analytics: de-fixate the hardcoded HUD port, make the scoreboard's opencode cost actually resolve, and add a reflection-based `gen-config` that generates a self-documenting TOML config from the config structs (retiring the drift-prone hand-maintained `config.sample.toml`).
@@ -622,6 +630,99 @@ Expected: `ok` — `TestConfigSampleIsFresh` passes (committed sample == generat
 ```bash
 git add cmd/ringer/genconfig.go cmd/ringer/genconfig_test.go config.sample.toml
 git commit -m "cmd: gen-config subcommand; regenerate config.sample.toml (drift-locked)"
+```
+
+---
+
+## Task 5: Cost column in the Models display
+
+**Files:**
+- Modify: `internal/scoreboard/scoreboard.go` — `FormatShortCost(cost *float64) string`
+- Modify: `internal/hud/views/models.templ` — add a Cost column to the HUD Models panel
+- Modify: `internal/hud/views/models_scoreboard.templ` — add a Cost column to the `models --html` page
+- Test: `internal/scoreboard/scoreboard_test.go` (FormatShortCost table); regenerate the HUD/`--html` goldens
+
+**Interfaces:**
+- Consumes: `scoreboard.Row.Cost *float64` (resolved by Task 2 + the 5a scoreboard).
+- Produces: `scoreboard.FormatShortCost(cost *float64) string` — port of Python `fmt_short_task_cost`: `nil → "in plan"` (OAuth engines / no catalog match), `0 → "free"`, `< $0.10 → "<1¢"` or `"~N¢"` (rounded cents), else `"$X.XX"`.
+
+**Background:** Task 2 made `Row.Cost` resolve for opencode, but it's only in `--json` + drives `ORDER BY`. This surfaces it as a visible column in the two rollup views (the HUD Models panel and the `--html` scoreboard page — both render `scoreboard.Row`, which carries `Cost`). The CLI `models` table renders per-`(model,task_type)` groups (no `Cost`) and stays as-is (Python parity — cost was never in that table).
+
+- [ ] **Step 1: Write the failing formatter test**
+
+Add to `internal/scoreboard/scoreboard_test.go`:
+
+```go
+func TestFormatShortCost(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	cases := []struct {
+		cost *float64
+		want string
+	}{
+		{nil, "in plan"},
+		{f(0), "free"},
+		{f(0.0435), "~4¢"},
+		{f(0.005), "<1¢"},
+		{f(0.5), "$0.50"},
+		{f(1.25), "$1.25"},
+	}
+	for _, c := range cases {
+		if got := FormatShortCost(c.cost); got != c.want {
+			t.Errorf("FormatShortCost(%v) = %q, want %q", c.cost, got, c.want)
+		}
+	}
+}
+```
+
+- [ ] **Step 2: Run it, confirm it fails**
+
+Run: `./build.sh --test 2>&1 | grep -E "internal/scoreboard|undefined|FAIL"`
+Expected: FAIL — `FormatShortCost` undefined.
+
+- [ ] **Step 3: Implement `FormatShortCost`**
+
+Add to `internal/scoreboard/scoreboard.go` (import `math`, `fmt` if not already):
+
+```go
+// FormatShortCost renders a per-task estimated cost for display (port of
+// Python fmt_short_task_cost): nil -> "in plan" (OAuth-plan engine or no
+// catalog match), 0 -> "free", under $0.10 -> cents, else "$X.XX".
+func FormatShortCost(cost *float64) string {
+	if cost == nil {
+		return "in plan"
+	}
+	v := *cost
+	if v == 0 {
+		return "free"
+	}
+	if v < 0.10 {
+		cents := v * 100
+		if cents < 1 {
+			return "<1¢"
+		}
+		return fmt.Sprintf("~%d¢", int(math.Round(cents)))
+	}
+	return fmt.Sprintf("$%.2f", v)
+}
+```
+
+- [ ] **Step 4: Run it, confirm green**
+
+Run: `./build.sh --test 2>&1 | grep -E "internal/scoreboard|FAIL|ok"`
+
+- [ ] **Step 5: Add the Cost column to the two rollup views**
+
+In `internal/hud/views/models.templ` (`ModelsPanel`), add a `<th>Cost</th>` header and a `<td>{ scoreboard.FormatShortCost(r.Cost) }</td>` cell (place it after Tokens, before or after Harness — pick a sensible column order and keep it consistent between the two views). Do the same in `internal/hud/views/models_scoreboard.templ` (the `--html` page). `views` already imports `scoreboard`, so `scoreboard.FormatShortCost` is directly callable.
+
+- [ ] **Step 6: Regenerate goldens + verify**
+
+Run: `./build.sh --test` — the HUD panel / `--html` golden tests will fail on the new column. Regenerate with the sanctioned `go test ./internal/hud/views -run <ModelsPanelGolden|ModelScoreboard> -update`, then re-run `./build.sh --test` and confirm green. (The mock-data goldens will show `in plan` for the cost cell — mock/slowsh have no catalog match — which is the correct display.)
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add internal/scoreboard/scoreboard.go internal/scoreboard/scoreboard_test.go internal/hud/views/models.templ internal/hud/views/models_scoreboard.templ internal/hud/views/*_templ.go internal/hud/views/testdata/
+git commit -m "hud: cost column in the Models panel + --html scoreboard (FormatShortCost)"
 ```
 
 ---
