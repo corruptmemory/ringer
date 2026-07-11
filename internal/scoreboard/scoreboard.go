@@ -2,6 +2,7 @@
 package scoreboard
 
 import (
+	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -95,6 +96,27 @@ func Scoreboard(s *store.Store, f Filter, reg Registry) ([]Row, error) {
 			MedianTokens: floorTokens(m.MedianTokensF), TaskTypes: nested[m.Model]})
 	}
 	return out, nil
+}
+
+// FormatShortCost renders a per-task estimated cost for display (port of
+// Python fmt_short_task_cost): nil -> "in plan" (OAuth-plan engine or no
+// catalog match), 0 -> "free", under $0.10 -> cents, else "$X.XX".
+func FormatShortCost(cost *float64) string {
+	if cost == nil {
+		return "in plan"
+	}
+	v := *cost
+	if v == 0 {
+		return "free"
+	}
+	if v < 0.10 {
+		cents := v * 100
+		if cents < 1 {
+			return "<1¢"
+		}
+		return fmt.Sprintf("~%d¢", int(math.Round(cents)))
+	}
+	return fmt.Sprintf("$%.2f", v)
 }
 
 // ExploreCandidates ports catalog_explore_candidates: untested, text->text,
