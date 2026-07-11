@@ -162,6 +162,17 @@ func TestArtifactEnabledExplicitFalse(t *testing.T) {
 	}
 }
 
+func TestHudPortDefaultAndOverride(t *testing.T) {
+	var c AppConfig
+	if got := c.HudPort(); got != 8700 {
+		t.Fatalf("default HudPort = %d, want 8700", got)
+	}
+	c.Hud.Port = 9100
+	if got := c.HudPort(); got != 9100 {
+		t.Fatalf("configured HudPort = %d, want 9100", got)
+	}
+}
+
 func TestExpandUser(t *testing.T) {
 	home, err := os.UserHomeDir()
 	if err != nil {

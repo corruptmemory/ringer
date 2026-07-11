@@ -32,7 +32,7 @@ func (c *hudCmd) Execute(args []string) error {
 	}
 	port := c.Port
 	if port == 0 {
-		port = hud.DefaultPort
+		port = cfg.HudPort()
 	}
 	return hud.New(cfg.StateDirPath(), lg).ListenAndServe(port) // blocks until killed
 }

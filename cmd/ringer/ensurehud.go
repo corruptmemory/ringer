@@ -25,6 +25,12 @@ func hudIsAlive(port int) bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// ensureHUD is the seam runManifestFile calls through so tests can assert
+// whether a HUD would be spawned (e.g. dry-run must NOT) without ever
+// launching a real detached `ringer hud` subprocess — Ringer has a fork-bomb
+// history here (Plan 4), so a regressed guard must fail a test, not spawn.
+var ensureHUD = ensureHUDRunning
+
 // ensureHUDRunning makes the Ringside HUD available: if nothing answers the
 // probe, spawn a detached `ringer hud`, poll up to ~3s for it, then open the
 // browser exactly once — only when it was not already alive. Best-effort: a

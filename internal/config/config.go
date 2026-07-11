@@ -54,6 +54,12 @@ type CatalogConfig struct {
 	Source string `toml:"source"`
 }
 
+// HudConfig configures the Ringside HUD. Port is the fixed port the HUD binds
+// (127.0.0.1 only, fails if taken); run/demo probe + auto-spawn on it.
+type HudConfig struct {
+	Port int `toml:"port" doc:"HUD port (127.0.0.1). run/demo auto-spawn + probe here. Default 8700 (matches hud.DefaultPort)."`
+}
+
 type AppConfig struct {
 	IdentityDefault string                  `toml:"identity_default"`
 	StateDir        string                  `toml:"state_dir"` // empty -> ~/.ringer
@@ -63,6 +69,7 @@ type AppConfig struct {
 	Artifact        ArtifactConfig          `toml:"artifact"`
 	Scoreboard      ScoreboardConfig        `toml:"scoreboard"`
 	Catalog         CatalogConfig           `toml:"catalog"`
+	Hud             HudConfig               `toml:"hud"`
 	Engines         map[string]EngineConfig `toml:"engines"`
 }
 
@@ -134,6 +141,15 @@ func (c *AppConfig) ModelNotesPath() string {
 // to signal "use the caller's default" (catalog.DefaultSource).
 func (c *AppConfig) CatalogSource() string {
 	return c.Catalog.Source
+}
+
+// HudPort resolves the HUD port: the configured [hud] port, or 8700.
+// (config is a leaf; the literal mirrors internal/hud.DefaultPort.)
+func (c *AppConfig) HudPort() int {
+	if c.Hud.Port > 0 {
+		return c.Hud.Port
+	}
+	return 8700
 }
 
 func Load(path string) (*AppConfig, error) {
