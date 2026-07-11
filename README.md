@@ -15,13 +15,13 @@ And because a swarm you can't see is a swarm you don't trust: **Ringside**, a lo
 ## How it works
 
 ```
-manifest.json ──▶ ringer.py ──▶ N parallel workers (codex exec, each in its own dir)
+manifest.json ──▶ ringer ──▶ N parallel workers (codex exec, each in its own dir)
                       │                │
                       │                ▼
                       │         executed checks ── fail ──▶ retry once w/ failure context
                       │                │
                       ▼                ▼
-              ~/.ringer/runs/    eval log (JSONL or Postgres)
+              ~/.ringer/runs/    eval log (SQLite)
                       │
                       ▼
               Ringside, in the browser (live, all swarms, all identities)
@@ -29,7 +29,7 @@ manifest.json ──▶ ringer.py ──▶ N parallel workers (codex exec, each
 
 ## Quickstart
 
-Ringer runs on macOS and Linux (Windows via WSL) and needs Python 3.11+.
+Ringer runs on macOS and Linux (Windows via WSL) and ships as a single static binary — no runtime dependencies.
 
 1. Install a worker CLI and sign in (Codex is the built-in default engine):
 
@@ -49,13 +49,13 @@ mkdir -p ~/.config/ringer && cp config.sample.toml ~/.config/ringer/config.toml 
 
 ```bash
 # optional but recommended: teach your agent to route work through ringer
-./ringer.py install-agent
+ringer install-agent
 ```
 
 4. Run the demo:
 
 ```bash
-./ringer.py demo                                      # 3 real workers, verified end to end
+ringer demo                                           # 3 real workers, verified end to end
 ```
 
 The demo spawns three Codex workers in parallel, verifies each artifact by executing it, and prints a verdict table — and Ringside, the live dashboard, opens in your browser on its own. If all three say PASS, that's the whole setup.
@@ -63,7 +63,7 @@ The demo spawns three Codex workers in parallel, verifies each artifact by execu
 Run your own batch:
 
 ```bash
-./ringer.py run swarm.json --max-parallel 4
+ringer run swarm.json --max-parallel 4
 ```
 
 ```json
@@ -114,7 +114,7 @@ Not sure what your tasks even are yet? [`docs/interview-prompt.md`](docs/intervi
 Lint checks a manifest for the mistakes that make swarms hard to trust: checks that cannot fail, silent checks, worktree deliverables that disappear, worker commits that die with deleted worktrees, serial fan-out, write collisions, and underspecified specs.
 
 ```bash
-./ringer.py lint templates/review-swarm.json
+ringer lint templates/review-swarm.json
 lint: clean (1 tasks)
 ```
 
@@ -129,14 +129,16 @@ Between swarms, agents drift back to invisible inline work. Reminders decay, so 
 Run one command:
 
 ```bash
-./ringer.py install-agent
+ringer install-agent
 ```
 
 It installs the ringer skill — the orchestrator playbook — user-level for Claude Code, and registers two gentle hooks: a Bash hook that notices model-calling or harness commands running outside a live Ringer run, and an edit-loop hook that notices batch editing without a run. Each hook nudges ONCE per session, pointing the agent at the skill.
 
-The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `./ringer.py uninstall-agent`.
+The hooks never block anything. A user who says "just do it inline" is obeyed; uninstall with `ringer uninstall-agent`.
 
 For CI and evals, `config.sample.toml` includes `[engines.mock]` so the enforcement stack can be tested without an API bill.
+
+> **Migrating from the Python ringer:** if you keep a non-default `state_dir` in your config, also set `$RINGER_HOME` to that same path — otherwise the nudge hook's live-run suppression won't see your active runs (harmless; you'll just get an occasional extra advisory nudge during a live run). Also, `ringer uninstall-agent` only recognizes hooks it installed itself (matched by the `nudge-hook` marker in the hook command) — it will not remove a legacy `python3 …/ringer_nudge.py` hook left behind by the old Python `install-agent`. Run the old Python `uninstall-agent` first, or delete that hook entry from `settings.json` by hand.
 
 ## Engines are pluggable
 
@@ -201,39 +203,37 @@ Route with per-task `"engine": "grok"` and pick the model with `"model": "grok-b
 Ringside is a local web page — no install, no account, nothing leaves your machine. Your first run opens it automatically; every later run streams into the same tab:
 
 ```bash
-./ringer.py run manifest.json   # starts Ringside and opens the tab for you
-./ringer.py hud                 # or open it any time → http://127.0.0.1:8700
+ringer run manifest.json        # starts Ringside and opens the tab for you
+ringer hud                      # or open it any time → http://127.0.0.1:8700
 ```
 
 The top of the page is the run's live results document: what the job is, a progress bar of rounds, and "The work" — every deliverable each worker filed, with a plain-English line saying what the check proved and the raw check output one click away. Below it, the agents: expand a worker to see the exact brief it was handed, which engine and model are typing, and its live work stream. Past runs stay in a versioned library, and a swarm whose orchestrator *died* without finishing gets its own unmissable state — the failure mode every dashboard forgets.
 
 Multiple swarms at once is the designed-for case: run three batches under three identities and Ringside shows all three, live. `--browser` opens a simpler per-run fallback dashboard, and `--no-dashboard` runs headless.
 
-A native desktop build (Tauri, under `hud/`) exists as a v0.1.1 prototype; the web dashboard is currently ahead of it — start there.
-
 ## The eval loop
 
 ![Timed, verified, logged](docs/eval-loop.png)
 
-Every worker attempt — pass, fail, timeout, retry — is logged with its spec, engine, duration, token count, and the raw check output. Local JSONL by default; point `[eval.postgres]` at a database to aggregate across machines. Failure rows are the point: they tell you which spec styles, engines, and task shapes actually work, so the swarm gets better on evidence instead of vibes.
+Every worker attempt — pass, fail, timeout, retry — is logged with its spec, engine, duration, token count, and the raw check output. Local SQLite by default (`<state_dir>/ringer.db`); `ringer db export` dumps it to JSONL to aggregate across machines. Failure rows are the point: they tell you which spec styles, engines, and task shapes actually work, so the swarm gets better on evidence instead of vibes.
 
 ## Model performance log
 
-Every task attempt is logged **automatically and locally** to `~/.ringer/runs.jsonl` — no setup, no account, nothing leaves your machine. Each row carries the per-attempt verdict straight from the EXECUTED check, plus duration, tokens, the resolved `model`, the task's `task_type` (if the manifest set one), and the `retry` number.
+Every task attempt is logged **automatically and locally** to a SQLite database at `<state_dir>/ringer.db` (`~/.ringer/ringer.db` by default) — no setup, no account, nothing leaves your machine. Each row carries the per-attempt verdict straight from the EXECUTED check, plus duration, tokens, the resolved `model`, the task's `task_type` (if the manifest set one), and the `retry` number.
 
 Read it with:
 
 ```bash
-./ringer.py models          # per-(model, task_type) scoreboard across the local log
+ringer models                # per-(model, task_type) scoreboard across the local log
 ```
 
-The scoreboard reports, per model and task_type: tasks, attempts, `pass_rate`, `first_try_pass_rate`, median duration and token count, and `last_seen`. The signal for routing is `first_try_pass_rate` — the share of tasks that passed on attempt 1 without a retry; `pass_rate` is the rescued rate after Ringer's single retry, so the gap between the two is the cost of the retry lane. Slice the log with `--log` (a different JSONL), `--task-type`, `--model`, `--engine`, `--since`, or `--json` for piping elsewhere.
+The scoreboard reports, per model and task_type: tasks, attempts, `pass_rate`, `first_try_pass_rate`, median duration and token count, and `last_seen`. The signal for routing is `first_try_pass_rate` — the share of tasks that passed on attempt 1 without a retry; `pass_rate` is the rescued rate after Ringer's single retry, so the gap between the two is the cost of the retry lane. Slice the log with `--task-type`, `--model`, `--engine`, `--since`, or `--json` for piping elsewhere.
 
-History from before the `model` / `task_type` / `retry` columns existed can be seeded in one pass:
+History from before the `model` / `task_type` / `retry` columns existed can be imported in one pass — `ringer db import` reads a legacy JSONL log and inserts the rows into the eval database, backfilling `model` from each run's on-disk state and `task_type` from an optional mapping file:
 
 ```bash
-./scripts/backfill_model_log.py \
-  --log ~/.ringer/runs.jsonl \
+ringer db import \
+  --jsonl ~/.ringer/runs.jsonl \
   --runs-dir ~/.ringer/runs \
   --mapping mapping.json
 ```
@@ -253,7 +253,7 @@ Rows that match nothing keep their old `task_type` (empty); rows whose run-state
 The scoreboard only knows models you've already run. To reason about models you *haven't* tried yet, Ringer keeps a local snapshot of the OpenRouter catalog and a change log alongside the runs log:
 
 ```bash
-./ringer.py catalog                  # fetch/refresh ~/.ringer/openrouter-catalog.json
+ringer catalog                        # fetch/refresh ~/.ringer/openrouter-catalog.json
 ```
 
 | Flag | What it does |
@@ -267,13 +267,13 @@ The scoreboard only knows models you've already run. To reason about models you 
 
 The snapshot lives at `~/.ringer/openrouter-catalog.json`; the change log sits beside it as `~/.ringer/openrouter-catalog.changes.jsonl`, appending one row per added, removed, price-changed, went-free, or went-paid event between snapshots. Free promos get their own call-out (`went_free`) because a temporarily-free model is a zero-cost experiment — the cheapest way to audition a new model is to catch it while someone else is paying for it.
 
-Catalog fetches are throttled to once per 24 hours. A `run` triggers that refresh in the background on its way up; it never blocks or fails a run — if the fetch is slow or the network is down, Ringer carries on with the snapshot it has. The throttle and the auto-refresh-on-run are both documented in `./ringer.py run --help` and can be turned off there.
+Catalog fetches are throttled to once per 24 hours. A `run` triggers that refresh in the background on its way up; it never blocks or fails a run — if the fetch is slow or the network is down, Ringer carries on with the snapshot it has. The throttle and the auto-refresh-on-run are both documented in `ringer run --help` and can be turned off there.
 
 Once you have a catalog and a log, `models --explore` joins them into a routing recommendation:
 
 ```bash
-./ringer.py models --explore                 # tiers across all task types
-./ringer.py models --explore --task-type docs # tiers for one task shape
+ringer models --explore                       # tiers across all task types
+ringer models --explore --task-type docs      # tiers for one task shape
 ```
 
 Models with local evidence are sorted into tiers:
@@ -284,7 +284,7 @@ Models with local evidence are sorted into tiers:
 
 The promotion ladder is the point. A model enters as **untested**. You spend a small slice of suitable runs — about one task per run — auditioning cheap or free candidates on small, low-stakes work where the executed check is strong and the single retry absorbs the failure: docs sweeps, mechanical edits, persona reviews. While evidence accumulates the model sits on **probation**. At 3+ tasks with `first_try_pass_rate >= 0.67` it's **proven** for that task type and earns a lane on the heavy work. The recommendation flow is the same one this ladder implies: exploit proven models for the load-bearing tasks, and keep spending that small slice auditioning untested candidates so the bench refills itself.
 
-The per-user philosophy, stated plainly: every user's workload is different, so the scoreboard learns what works for *your* tasks on *your* machine. A model that's proven in someone else's log is untested in yours until you've run it. The numbers are not portable between users, and the routing recommendations get personal as the log grows — which is exactly why the catalog and the change log stay local and the explore tiers are computed from your own `runs.jsonl`, not from anyone's aggregate.
+The per-user philosophy, stated plainly: every user's workload is different, so the scoreboard learns what works for *your* tasks on *your* machine. A model that's proven in someone else's log is untested in yours until you've run it. The numbers are not portable between users, and the routing recommendations get personal as the log grows — which is exactly why the catalog and the change log stay local and the explore tiers are computed from your own eval database, not from anyone's aggregate.
 
 ## Hard-won invariants
 
@@ -301,9 +301,9 @@ Four rules are baked into every worker invocation. They all cost us real debuggi
 
 ## Requirements
 
-- Python 3.11+ (stdlib only; `psycopg` needed only for the optional Postgres eval backend)
-- At least one agent CLI (Codex works out of the box)
-- Rust toolchain, only if you're building Ringside from source
+Ringer ships as a single static binary — macOS and Linux (Windows via WSL). To run it, that's the whole list; you also need at least one agent CLI (Codex works out of the box).
+
+To build from source: Go 1.26 and `./build.sh` (the only supported entry point — it generates the templ views, formats, vets, and builds; add `--test` to run the test suite).
 
 ![Between rounds](docs/between-rounds.png)
 
