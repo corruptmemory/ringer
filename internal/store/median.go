@@ -4,6 +4,7 @@ package store
 import (
 	"database/sql/driver"
 	"sort"
+	"sync"
 
 	sqlite "modernc.org/sqlite"
 )
@@ -54,21 +55,23 @@ func (e driverError) Error() string { return string(e) }
 
 // registerMedian installs median() on every connection opened afterward.
 // Idempotent-safe: guarded so repeated calls (test + prod Open) don't error.
-func registerMedian() {
-	if medianRegistered {
-		return
-	}
-	medianRegistered = true
-	err := sqlite.RegisterFunction("median", &sqlite.FunctionImpl{
-		NArgs:         1,
-		Deterministic: true,
-		MakeAggregate: func(_ sqlite.FunctionContext) (sqlite.AggregateFunction, error) {
-			return &medianAgg{}, nil
-		},
-	})
-	if err != nil {
-		panic("store: register median(): " + err.Error())
-	}
-}
+// sync.Once (not a plain bool) because Store.Open is called from HTTP
+// request handlers (net/http serves one goroutine per connection), so
+// concurrent first callers must not race on modernc's package-global driver
+// registry nor double-register.
+var medianOnce sync.Once
 
-var medianRegistered bool
+func registerMedian() {
+	medianOnce.Do(func() {
+		err := sqlite.RegisterFunction("median", &sqlite.FunctionImpl{
+			NArgs:         1,
+			Deterministic: true,
+			MakeAggregate: func(_ sqlite.FunctionContext) (sqlite.AggregateFunction, error) {
+				return &medianAgg{}, nil
+			},
+		})
+		if err != nil {
+			panic("store: register median(): " + err.Error())
+		}
+	})
+}
