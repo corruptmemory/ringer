@@ -16,10 +16,11 @@ import (
 
 // ModelsPanel renders the tiered per-model scoreboard (scoreboard.Scoreboard
 // order preserved) as a table: model display, tier chip, tasks, pass %,
-// first-try %, median tokens, harness. Reuses the modelName/tierColor/
+// first-try %, median tokens, cost, harness. Reuses the modelName/tierColor/
 // pctString/harnessOrUnknown/scoreboardTokString helpers models_scoreboard.templ
-// already established for the standalone `ringer models --html` report, so
-// the live HUD table and the standalone report never drift out of format.
+// already established for the standalone `ringer models --html` report (and
+// scoreboard.FormatShortCost for the cost cell), so the live HUD table and
+// the standalone report never drift out of format.
 // Empty rows (missing/empty DB, no attempts yet) render an empty-state line
 // instead of an empty table — models change slowly so a blank table here
 // would otherwise look broken rather than "nothing evaluated yet".
@@ -54,7 +55,7 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		} else {
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<table><thead><tr><th>Model</th><th>Tier</th><th>Tasks</th><th>Pass</th><th>First</th><th>Tokens</th><th>Harness</th></tr></thead> <tbody>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 3, "<table><thead><tr><th>Model</th><th>Tier</th><th>Tasks</th><th>Pass</th><th>First</th><th>Tokens</th><th>Cost</th><th>Harness</th></tr></thead> <tbody>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
@@ -66,7 +67,7 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				var templ_7745c5c3_Var2 string
 				templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinStringErrs(modelName(r))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 38, Col: 25}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 40, Col: 25}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 				if templ_7745c5c3_Err != nil {
@@ -79,7 +80,7 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				var templ_7745c5c3_Var3 string
 				templ_7745c5c3_Var3, templ_7745c5c3_Err = templruntime.SanitizeStyleAttributeValues("background:" + tierColor(r.Tier))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 39, Col: 71}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 41, Col: 71}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 				if templ_7745c5c3_Err != nil {
@@ -92,7 +93,7 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				var templ_7745c5c3_Var4 string
 				templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(r.Tier)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 39, Col: 82}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 41, Col: 82}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 				if templ_7745c5c3_Err != nil {
@@ -105,7 +106,7 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				var templ_7745c5c3_Var5 string
 				templ_7745c5c3_Var5, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprintf("%d", r.Tasks))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 40, Col: 52}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 42, Col: 52}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var5))
 				if templ_7745c5c3_Err != nil {
@@ -118,7 +119,7 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				var templ_7745c5c3_Var6 string
 				templ_7745c5c3_Var6, templ_7745c5c3_Err = templ.JoinStringErrs(pctString(r.PassRate))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 41, Col: 47}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 43, Col: 47}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var6))
 				if templ_7745c5c3_Err != nil {
@@ -131,7 +132,7 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				var templ_7745c5c3_Var7 string
 				templ_7745c5c3_Var7, templ_7745c5c3_Err = templ.JoinStringErrs(pctString(r.FirstTryPassRate))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 42, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 44, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var7))
 				if templ_7745c5c3_Err != nil {
@@ -144,36 +145,49 @@ func ModelsPanel(rows []scoreboard.Row) templ.Component {
 				var templ_7745c5c3_Var8 string
 				templ_7745c5c3_Var8, templ_7745c5c3_Err = templ.JoinStringErrs(scoreboardTokString(r.MedianTokens))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 43, Col: 61}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 45, Col: 61}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var8))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</td><td>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 11, "</td><td class=\"mono\">")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var9 string
-				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(harnessOrUnknown(r.Harness))
+				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinStringErrs(scoreboard.FormatShortCost(r.Cost))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 44, Col: 40}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 46, Col: 60}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</td></tr>")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 12, "</td><td>")
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				var templ_7745c5c3_Var10 string
+				templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(harnessOrUnknown(r.Harness))
+				if templ_7745c5c3_Err != nil {
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `internal/hud/views/models.templ`, Line: 47, Col: 40}
+				}
+				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
+				if templ_7745c5c3_Err != nil {
+					return templ_7745c5c3_Err
+				}
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</td></tr>")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 			}
-			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 13, "</tbody></table>")
+			templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</tbody></table>")
 			if templ_7745c5c3_Err != nil {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 14, "</div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 15, "</div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

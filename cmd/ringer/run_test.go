@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/corruptmemory/ringer/internal/config"
@@ -8,6 +11,7 @@ import (
 	"github.com/corruptmemory/ringer/internal/jail"
 	"github.com/corruptmemory/ringer/internal/logging"
 	"github.com/corruptmemory/ringer/internal/manifest"
+	"github.com/jessevdk/go-flags"
 )
 
 // TestSelectIsolator covers the branch logic the run.go isolation-selection
@@ -78,5 +82,69 @@ func TestSelectIsolator(t *testing.T) {
 				t.Fatalf("iso = %T, want *isolate.JailIsolator (jail preflight OK on this host)", iso)
 			}
 		})
+	}
+}
+
+// TestPortFlagParsing drives the real go-flags parser (like
+// TestModelsFlagParsing) to prove runCmd and demoCmd both carry a --port
+// flag that binds into their Port field. Port *resolution* (precedence
+// between the flag, [hud] config, and the 8700 default) is unit-tested in
+// internal/config; this just proves the flag is wired.
+func TestPortFlagParsing(t *testing.T) {
+	t.Run("runCmd --port", func(t *testing.T) {
+		var c runCmd
+		p := flags.NewParser(&c, flags.None)
+		if _, err := p.ParseArgs([]string{"--port", "9100", "manifest.json"}); err != nil {
+			t.Fatalf("ParseArgs: %v", err)
+		}
+		if c.Port != 9100 {
+			t.Errorf("Port = %d, want 9100", c.Port)
+		}
+	})
+
+	t.Run("demoCmd --port", func(t *testing.T) {
+		var c demoCmd
+		p := flags.NewParser(&c, flags.None)
+		if _, err := p.ParseArgs([]string{"--port", "9100"}); err != nil {
+			t.Fatalf("ParseArgs: %v", err)
+		}
+		if c.Port != 9100 {
+			t.Errorf("Port = %d, want 9100", c.Port)
+		}
+	})
+}
+
+// TestRunManifestFileDryRunIgnoresHudPort proves the dry-run path never
+// spawns/ensures a HUD (brief Step 6). It swaps the package-level ensureHUD
+// seam for a recorder and asserts it is NOT called on a dry-run — so if the
+// `!dryRun` guard at run.go regressed, this test FAILS instead of silently
+// launching a real detached `ringer hud` during the test run (the fork-bomb
+// hazard Plan 4 fought). A bogus hudPortOverride and a nonexistent config
+// path further prove the port-resolution logic is short-circuited too.
+func TestRunManifestFileDryRunIgnoresHudPort(t *testing.T) {
+	dir := t.TempDir()
+	data, err := buildDemoManifest(t.TempDir())
+	if err != nil {
+		t.Fatalf("buildDemoManifest: %v", err)
+	}
+	manifestPath := filepath.Join(dir, "ringer.json")
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	prevConfig := opts.Config
+	opts.Config = filepath.Join(dir, "nonexistent-config.toml")
+	t.Cleanup(func() { opts.Config = prevConfig })
+
+	orig := ensureHUD
+	defer func() { ensureHUD = orig }()
+	called := false
+	ensureHUD = func(stateDir string, port int, lg logging.Logger, openBrowser bool) { called = true }
+
+	if err := runManifestFile(context.Background(), manifestPath, 0, "test", true, false, 65535); err != nil {
+		t.Fatalf("runManifestFile dry-run: %v", err)
+	}
+	if called {
+		t.Fatal("dry-run must not spawn/ensure a HUD")
 	}
 }

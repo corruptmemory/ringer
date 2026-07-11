@@ -17,6 +17,7 @@ type demoCmd struct {
 	Identity    string `long:"identity" description:"identity for eval rows (default: resolved from config/env/hostname)"`
 	DryRun      bool   `long:"dry-run" description:"print the plan and exit"`
 	NoDashboard bool   `long:"no-dashboard" description:"do not ensure the Ringside HUD is running / open a browser"`
+	Port        int    `long:"port" description:"HUD port for the auto-started Ringside (default: [hud] port or 8700)"`
 }
 
 func (c *demoCmd) Execute(args []string) error {
@@ -29,7 +30,7 @@ func (c *demoCmd) Execute(args []string) error {
 	// only in where the manifest came from, not in how it's run.
 	ctx, stop := signalContext()
 	defer stop()
-	return runManifestFile(ctx, manifestPath, c.MaxParallel, c.Identity, c.DryRun, c.NoDashboard)
+	return runManifestFile(ctx, manifestPath, c.MaxParallel, c.Identity, c.DryRun, c.NoDashboard, c.Port)
 }
 
 // buildDemoManifest returns the JSON bytes of a self-contained, 3-task mock

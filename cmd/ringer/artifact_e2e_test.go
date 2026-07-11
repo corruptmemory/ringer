@@ -88,7 +88,7 @@ isolation = "none"
 
 	const runName = "ringer-demo" // buildDemoManifest's fixed RunName
 
-	if err := runManifestFile(context.Background(), manifestPath, 0, "e2e-test", false, true); err != nil {
+	if err := runManifestFile(context.Background(), manifestPath, 0, "e2e-test", false, true, 0); err != nil {
 		t.Fatalf("runManifestFile: %v", err)
 	}
 

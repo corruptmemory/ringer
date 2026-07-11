@@ -85,3 +85,23 @@ func TestExploreCandidates(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatShortCost(t *testing.T) {
+	f := func(v float64) *float64 { return &v }
+	cases := []struct {
+		cost *float64
+		want string
+	}{
+		{nil, "in plan"},
+		{f(0), "free"},
+		{f(0.0435), "~4¢"},
+		{f(0.005), "<1¢"},
+		{f(0.5), "$0.50"},
+		{f(1.25), "$1.25"},
+	}
+	for _, c := range cases {
+		if got := FormatShortCost(c.cost); got != c.want {
+			t.Errorf("FormatShortCost(%v) = %q, want %q", c.cost, got, c.want)
+		}
+	}
+}

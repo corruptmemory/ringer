@@ -8,10 +8,11 @@ import (
 
 // ModelsPanel renders the tiered per-model scoreboard (scoreboard.Scoreboard
 // order preserved) as a table: model display, tier chip, tasks, pass %,
-// first-try %, median tokens, harness. Reuses the modelName/tierColor/
+// first-try %, median tokens, cost, harness. Reuses the modelName/tierColor/
 // pctString/harnessOrUnknown/scoreboardTokString helpers models_scoreboard.templ
-// already established for the standalone `ringer models --html` report, so
-// the live HUD table and the standalone report never drift out of format.
+// already established for the standalone `ringer models --html` report (and
+// scoreboard.FormatShortCost for the cost cell), so the live HUD table and
+// the standalone report never drift out of format.
 // Empty rows (missing/empty DB, no attempts yet) render an empty-state line
 // instead of an empty table — models change slowly so a blank table here
 // would otherwise look broken rather than "nothing evaluated yet".
@@ -29,6 +30,7 @@ templ ModelsPanel(rows []scoreboard.Row) {
 						<th>Pass</th>
 						<th>First</th>
 						<th>Tokens</th>
+						<th>Cost</th>
 						<th>Harness</th>
 					</tr>
 				</thead>
@@ -41,6 +43,7 @@ templ ModelsPanel(rows []scoreboard.Row) {
 							<td class="mono">{ pctString(r.PassRate) }</td>
 							<td class="mono">{ pctString(r.FirstTryPassRate) }</td>
 							<td class="mono">{ scoreboardTokString(r.MedianTokens) }</td>
+							<td class="mono">{ scoreboard.FormatShortCost(r.Cost) }</td>
 							<td>{ harnessOrUnknown(r.Harness) }</td>
 						</tr>
 					}
