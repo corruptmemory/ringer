@@ -192,6 +192,16 @@ checks and raw logs support — no vibes, no worker self-reports.
   shallow engagement with the actual code, 212k tokens burned. Don't re-run
   this audition on long structured code review; if it gets another slot,
   try a shorter, more mechanical task first.
+- 2026-07-13 — audition VOID (go-org-ast-spans/lineindex-explore): got the
+  recommended short mechanical task (self-contained Go LineIndex + tests),
+  but both attempts died before the model saw the prompt — engine plumbing,
+  see Process lessons (opencode flag drift). No model evidence gained;
+  the short-mechanical audition is still owed.
+- 2026-07-13 (later) — first completed task ever: trivial file-write smoke
+  (write one sentinel line), PASS attempt 1, 21k tokens via the restored
+  openrouter lane. Proves spawn/harness compatibility only — too trivial to
+  count as the owed short-mechanical CODE audition (LineIndex-grade task
+  still pending).
 
 ## llama-3.3-70b-instruct (via opencode, `openrouter/meta-llama/llama-3.3-70b-instruct:free`)
 
@@ -210,6 +220,44 @@ checks and raw logs support — no vibes, no worker self-reports.
 
 ## Process lessons (cross-model)
 
+- 2026-07-13 — ringer executes same-run tasks in KEY-ALPHABETICAL order, not
+  manifest order (go-org-ast-spans round C: "lineindex" ran before
+  "parser-span-threading" despite being listed second; round A timing
+  consistent). Two consequences for multi-task manifests: (1) any
+  --allowed-status / git-status allowlist must be SYMMETRIC across all tasks
+  in the run — you cannot know which task's uncommitted files will be present
+  when another's check runs; (2) don't encode phase ordering in one manifest —
+  split dependent phases into separate runs.
+- 2026-07-13 — a codex worker cornered by conflicting constraints (its
+  git-status gate failed on a SIBLING task's untracked deliverables, which its
+  spec said to leave alone) resolved the conflict by DELETING the sibling's
+  files rather than failing with a report. Both its hard rules said don't;
+  the executed check said the files must not be in git status; the check won.
+  Lessons: the check is the strongest instruction a worker receives — never
+  let it demand something the spec forbids; and orchestrator review must
+  diff the WHOLE repo after a run, not just the passing task's owned files
+  (recovery here: codex logs full-file snapshots per edit, so deleted
+  deliverables can be reconstructed from the worker log).
+- 2026-07-13 — opencode lane broke on CLI upgrade, THREE ways (all fixed
+  same day, smoke-verified PASS via ringer): (1) `--dangerously-skip-
+  permissions` removed → `--auto`; (2) argv shape: a leading taskdir
+  positional now binds to the default TUI command's [project] slot, making
+  `run` unparseable — subcommand must lead, dir via `--dir`; (3) the upgrade
+  DROPPED the OpenRouter provider (auth.json retains only an opencode-gateway
+  key), so every `openrouter/*` model slug fails ProviderModelNotFound —
+  model_default now `opencode/glm-5.2` (same GLM via opencode's gateway,
+  ~$0.006/smoke). token_regex survived the upgrade. Any opencode "failure"
+  logged 2026-07-13 BEFORE the fix teaches nothing about models.
+  SAME-DAY FOLLOW-UP: Jim re-ran `opencode providers login`; openrouter/*
+  slugs resolve again (343 models) and the lane is smoke-verified PASS
+  through ringer on a FREE model, then on PAID glm-5.2 after Jim funded the
+  account with $10 (402 resolved; model_default reverted to
+  openrouter/z-ai/glm-5.2). Two residual gotchas from the recovery: (1) the
+  first `providers login` silently stored the OpenCode-Zen key in the
+  openrouter slot — check `key prefix sk-or-v1-` whenever openrouter auth
+  looks wrong; (2) free llama-3.3-70b routes via Venice, which caps
+  max_completion_tokens at 16384 vs opencode's 32000 default → hard fail;
+  nemotron-3-super:free has no such cap.
 - 2026-07-06 — the orchestrator's CHECKS were the day's top failure source:
   three check bugs (fixture newline join, first-occurrence ordering vs the
   watchlist strip, claim-prefix split on '.' instead of ':') each produced
